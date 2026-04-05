@@ -54,6 +54,7 @@ class QueryResultHandle:
     schema: list[dict[str, Any]]  # [{name, type, mode}]
     total_rows: int
     bytes_processed: int = 0
+    execution_seconds: float = 0.0
 
 
 @dataclass

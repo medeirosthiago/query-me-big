@@ -222,6 +222,7 @@ def _execute(request: QueryRequest) -> None:
         bq_client=client,
         handle=handle,
         source_label=resolved.source_label,
+        resolved_sql=resolved.sql,
         page_size=request.page_size,
     )
     tui.run()

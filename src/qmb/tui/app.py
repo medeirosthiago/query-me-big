@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +15,8 @@ from google.cloud import bigquery
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
+from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
@@ -18,7 +24,6 @@ from textual.widgets import (
     Input,
     Label,
     OptionList,
-    TextArea,
 )
 
 from qmb.bigquery.exporters import export_results
@@ -34,6 +39,11 @@ def _fmt_bytes(n: int) -> str:
         if n < 1024:
             return f"{n:,.1f} {unit}"
     return f"{n:,.1f} PB"
+
+
+# ---------------------------------------------------------------------------
+# Modal screens
+# ---------------------------------------------------------------------------
 
 
 class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
@@ -101,42 +111,88 @@ class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
         self.dismiss(None)
 
 
+class JobDetailScreen(ModalScreen[None]):
+    """Modal showing job execution details."""
+
+    BINDINGS = [Binding("escape,q", "dismiss_screen", "Close")]
+    DEFAULT_CSS = """
+    JobDetailScreen {
+        align: center middle;
+    }
+    #job-dialog {
+        width: 70;
+        height: 20;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #job-dialog Label {
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, handle: QueryResultHandle, source_label: str) -> None:
+        super().__init__()
+        self._handle = handle
+        self._source_label = source_label
+
+    def compose(self) -> ComposeResult:
+        h = self._handle
+        duration = (
+            f"{h.execution_seconds:.1f}s"
+            if h.execution_seconds < 60
+            else f"{h.execution_seconds / 60:.1f}m"
+        )
+        with Vertical(id="job-dialog"):
+            yield Label("Job Details", id="job-title")
+            yield Label(f"  Source:        {self._source_label}")
+            yield Label(f"  Job ID:        {h.job_id}")
+            yield Label(f"  Project:       {h.project}")
+            yield Label(f"  Location:      {h.location}")
+            yield Label(f"  Destination:   {h.destination_table}")
+            yield Label(f"  Total rows:    {h.total_rows:,}")
+            yield Label(f"  Processed:     {_fmt_bytes(h.bytes_processed)}")
+            yield Label(f"  Duration:      {duration}")
+            yield Label("")
+            yield Label("Press q or Escape to close")
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
+# Main app
+# ---------------------------------------------------------------------------
+
+
 class QueryResultApp(App):
     """Textual app for browsing BigQuery query results."""
 
+    ENABLE_COMMAND_PALETTE = False
     ESCAPE_TO_MINIMIZE = False
 
     CSS = """
-    #status-bar {
-        height: 3;
-        padding: 0 1;
-        background: $boost;
-    }
-    #status-bar Label {
-        margin-right: 2;
-    }
     #result-table {
         height: 1fr;
     }
-    #preview-panel {
-        height: 10;
-        border-top: solid $accent;
-        background: $surface;
-    }
-    #preview-area {
-        height: 1fr;
+    #page-bar {
+        height: 1;
+        background: $boost;
+        padding: 0 1;
     }
     """
 
     BINDINGS = [
-        Binding("q,escape", "quit", "Quit"),
-        Binding("n", "next_page", "Next Page"),
-        Binding("p", "prev_page", "Prev Page"),
-        Binding("c", "copy_cell", "Copy Cell"),
-        Binding("shift+c", "copy_row", "Copy Row (JSON)"),
-        Binding("e", "export", "Export"),
-        Binding("home", "first_page", "First Page"),
-        Binding("end", "last_page", "Last Page"),
+        Binding("q", "quit", "Quit"),
+        Binding("n", "next_page", "Next"),
+        Binding("p", "prev_page", "Prev"),
+        Binding("v", "vim_cell", "Vim Cell"),
+        Binding("s", "vim_query", "SQL"),
+        Binding("d", "show_job", "Details"),
+        Binding("e", "noop", "Export"),
+        Binding("y", "noop", "Yank"),
+        Binding("home", "first_page", "First Page", show=False),
+        Binding("end", "last_page", "Last Page", show=False),
     ]
 
     def __init__(
@@ -144,6 +200,7 @@ class QueryResultApp(App):
         bq_client: bigquery.Client,
         handle: QueryResultHandle,
         source_label: str,
+        resolved_sql: str = "",
         page_size: int = 200,
         **kwargs: Any,
     ) -> None:
@@ -151,22 +208,16 @@ class QueryResultApp(App):
         self.bq_client = bq_client
         self.handle = handle
         self.source_label = source_label
+        self.resolved_sql = resolved_sql
         self.page_size = page_size
         self.current_page = 0
         self._raw_rows: list[dict[str, Any]] = []
         self._column_names: list[str] = []
+        self._pending_key: str | None = None
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="status-bar"):
-            yield Label(f"Source: {self.source_label}", id="source-label")
-            yield Label(f"Rows: {self.handle.total_rows:,}", id="row-count")
-            yield Label(f"Processed: {_fmt_bytes(self.handle.bytes_processed)}", id="bytes-info")
-            yield Label("Page: 1/1", id="page-info")
-            yield Label(f"Job: {self.handle.job_id}", id="job-info")
         yield DataTable(id="result-table")
-        with Vertical(id="preview-panel"):
-            yield Label("Cell Preview (full value):", id="preview-title")
-            yield TextArea(read_only=True, id="preview-area")
+        yield Label("Page: 1/1", id="page-bar")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -174,54 +225,89 @@ class QueryResultApp(App):
         table.cursor_type = "cell"
         self._load_page(0)
 
-    @work(thread=True)
-    def _load_page(self, page: int) -> None:
-        """Fetch and display a page of results."""
-        result = fetch_page(self.bq_client, self.handle, page, self.page_size)
-        self.call_from_thread(self._render_page, result)
+    def action_noop(self) -> None:
+        pass
 
-    def _render_page(self, result: PageResult) -> None:
-        """Render a page of results in the DataTable."""
+    # -- key handling (hjkl + multi-key sequences) --------------------------
+
+    def on_key(self, event: Key) -> None:
+        # Second key of a pending sequence
+        if self._pending_key == "y":
+            self._clear_pending()
+            event.prevent_default()
+            event.stop()
+            if event.key == "w":
+                self._copy_cell()
+            elif event.key == "c":
+                self._copy_row_csv()
+            elif event.key == "j":
+                self._copy_row_json()
+            return
+
+        if self._pending_key == "e":
+            self._clear_pending()
+            if event.key == "c":
+                event.prevent_default()
+                event.stop()
+                self._quick_export(ExportFormat.CSV, ".csv")
+            elif event.key == "j":
+                event.prevent_default()
+                event.stop()
+                self._quick_export(ExportFormat.JSON, ".json")
+            else:
+                self._open_export_modal()
+            return
+
+        # First key — start sequence or navigate
+        if event.key == "y":
+            self._pending_key = "y"
+            self.set_timer(0.4, self._on_pending_timeout)
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "e":
+            self._pending_key = "e"
+            self.set_timer(0.4, self._on_pending_timeout)
+            event.prevent_default()
+            event.stop()
+            return
+
+        # vim-style navigation
         table = self.query_one("#result-table", DataTable)
-        table.clear(columns=True)
+        if event.key == "h":
+            table.action_cursor_left()
+            event.prevent_default()
+        elif event.key == "j":
+            table.action_cursor_down()
+            event.prevent_default()
+        elif event.key == "k":
+            table.action_cursor_up()
+            event.prevent_default()
+        elif event.key == "l":
+            table.action_cursor_right()
+            event.prevent_default()
 
-        self.current_page = result.page
-        self._raw_rows = result.rows
-        self._column_names = []
+    def _on_pending_timeout(self) -> None:
+        if self._pending_key == "e":
+            self._pending_key = None
+            self._open_export_modal()
+        elif self._pending_key == "y":
+            self._pending_key = None
 
-        if not result.display_rows:
-            table.add_column("(no results)")
-            self._update_status(result)
-            return
+    def _clear_pending(self) -> None:
+        self._pending_key = None
 
-        # Add columns
-        for col_info in self.handle.schema:
-            col_name = col_info["name"]
-            self._column_names.append(col_name)
-            table.add_column(col_name, key=col_name)
+    # -- clipboard ----------------------------------------------------------
 
-        # Add rows
-        for display_row in result.display_rows:
-            values = [display_row.get(col, "") for col in self._column_names]
-            table.add_row(*values)
-
-        self._update_status(result)
-
-    def _update_status(self, result: PageResult) -> None:
-        """Update the status bar."""
-        self.query_one("#page-info", Label).update(
-            f"Page: {result.page + 1}/{result.total_pages}"
-        )
-
-    @on(DataTable.CellHighlighted)
-    def cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
-        """Update preview panel when a cell is highlighted."""
+    def _copy_cell(self) -> None:
+        table = self.query_one("#result-table", DataTable)
         if not self._raw_rows or not self._column_names:
+            self.notify("No data to copy", severity="warning")
             return
 
-        row_idx = event.coordinate.row
-        col_idx = event.coordinate.column
-
+        row_idx = table.cursor_coordinate.row
+        col_idx = table.cursor_coordinate.column
         if row_idx < 0 or row_idx >= len(self._raw_rows):
             return
         if col_idx < 0 or col_idx >= len(self._column_names):
@@ -231,8 +317,159 @@ class QueryResultApp(App):
         raw_value = self._raw_rows[row_idx].get(col_name)
         full_text = get_raw_value(raw_value)
 
-        preview = self.query_one("#preview-area", TextArea)
-        preview.load_text(f"[{col_name}]\n{full_text}")
+        try:
+            pyperclip.copy(full_text)
+            self.notify(f"Copied {col_name} value", severity="information")
+        except pyperclip.PyperclipException:
+            self.notify("Clipboard not available", severity="error")
+
+    def _copy_row_json(self) -> None:
+        table = self.query_one("#result-table", DataTable)
+        if not self._raw_rows:
+            self.notify("No data to copy", severity="warning")
+            return
+
+        row_idx = table.cursor_coordinate.row
+        if row_idx < 0 or row_idx >= len(self._raw_rows):
+            return
+
+        raw_row = self._raw_rows[row_idx]
+        row_data = {k: get_raw_value(v) for k, v in raw_row.items()}
+
+        try:
+            pyperclip.copy(json.dumps(row_data, indent=2))
+            self.notify("Copied row as JSON", severity="information")
+        except pyperclip.PyperclipException:
+            self.notify("Clipboard not available", severity="error")
+
+    def _copy_row_csv(self) -> None:
+        table = self.query_one("#result-table", DataTable)
+        if not self._raw_rows or not self._column_names:
+            self.notify("No data to copy", severity="warning")
+            return
+
+        row_idx = table.cursor_coordinate.row
+        if row_idx < 0 or row_idx >= len(self._raw_rows):
+            return
+
+        raw_row = self._raw_rows[row_idx]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=self._column_names)
+        writer.writeheader()
+        writer.writerow({k: get_raw_value(v) for k, v in raw_row.items()})
+
+        try:
+            pyperclip.copy(buf.getvalue())
+            self.notify("Copied row as CSV", severity="information")
+        except pyperclip.PyperclipException:
+            self.notify("Clipboard not available", severity="error")
+
+    # -- vim cell / query ---------------------------------------------------
+
+    def action_vim_cell(self) -> None:
+        table = self.query_one("#result-table", DataTable)
+        if not self._raw_rows or not self._column_names:
+            self.notify("No data to inspect", severity="warning")
+            return
+
+        row_idx = table.cursor_coordinate.row
+        col_idx = table.cursor_coordinate.column
+        if row_idx < 0 or row_idx >= len(self._raw_rows):
+            return
+        if col_idx < 0 or col_idx >= len(self._column_names):
+            return
+
+        col_name = self._column_names[col_idx]
+        raw_value = self._raw_rows[row_idx].get(col_name)
+        full_text = get_raw_value(raw_value)
+
+        ext = ".txt"
+        try:
+            json.loads(full_text)
+            ext = ".json"
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        self._open_in_nvim(full_text, suffix=ext, prefix=f"qmb_{col_name}_")
+
+    def action_vim_query(self) -> None:
+        self._open_in_nvim(self.resolved_sql, suffix=".sql", prefix="qmb_query_")
+
+    def _open_in_nvim(self, content: str, suffix: str, prefix: str) -> None:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, prefix=prefix, delete=False
+        ) as f:
+            f.write(content)
+            tmp_path = f.name
+
+        with self.suspend():
+            subprocess.run(["nvim", "-R", tmp_path])
+
+        Path(tmp_path).unlink(missing_ok=True)
+
+    # -- export -------------------------------------------------------------
+
+    def _open_export_modal(self) -> None:
+        def on_export_result(result: tuple[ExportFormat, Path] | None) -> None:
+            if result is None:
+                return
+            fmt, path = result
+            try:
+                count = export_results(self.bq_client, self.handle, fmt, path)
+                self.notify(f"Exported {count:,} rows to {path}", severity="information")
+            except Exception as e:
+                self.notify(f"Export failed: {e}", severity="error")
+
+        self.push_screen(ExportScreen(), on_export_result)
+
+    def _quick_export(self, fmt: ExportFormat, ext: str) -> None:
+        path = Path(f"output{ext}")
+        try:
+            count = export_results(self.bq_client, self.handle, fmt, path)
+            self.notify(f"Exported {count:,} rows to {path}", severity="information")
+        except Exception as e:
+            self.notify(f"Export failed: {e}", severity="error")
+
+    # -- job details --------------------------------------------------------
+
+    def action_show_job(self) -> None:
+        self.push_screen(JobDetailScreen(self.handle, self.source_label))
+
+    # -- pagination ---------------------------------------------------------
+
+    @work(thread=True)
+    def _load_page(self, page: int) -> None:
+        result = fetch_page(self.bq_client, self.handle, page, self.page_size)
+        self.call_from_thread(self._render_page, result)
+
+    def _render_page(self, result: PageResult) -> None:
+        table = self.query_one("#result-table", DataTable)
+        table.clear(columns=True)
+
+        self.current_page = result.page
+        self._raw_rows = result.rows
+        self._column_names = []
+
+        if not result.display_rows:
+            table.add_column("(no results)")
+            self._update_page_bar(result)
+            return
+
+        for col_info in self.handle.schema:
+            col_name = col_info["name"]
+            self._column_names.append(col_name)
+            table.add_column(col_name, key=col_name)
+
+        for display_row in result.display_rows:
+            values = [display_row.get(col, "") for col in self._column_names]
+            table.add_row(*values)
+
+        self._update_page_bar(result)
+
+    def _update_page_bar(self, result: PageResult) -> None:
+        self.query_one("#page-bar", Label).update(
+            f"Page: {result.page + 1}/{result.total_pages}"
+        )
 
     def action_next_page(self) -> None:
         import math
@@ -253,65 +490,3 @@ class QueryResultApp(App):
 
         total_pages = max(1, math.ceil(self.handle.total_rows / self.page_size))
         self._load_page(total_pages - 1)
-
-    def action_copy_cell(self) -> None:
-        """Copy the full value of the selected cell to clipboard."""
-        table = self.query_one("#result-table", DataTable)
-        if not self._raw_rows or not self._column_names:
-            self.notify("No data to copy", severity="warning")
-            return
-
-        row_idx = table.cursor_coordinate.row
-        col_idx = table.cursor_coordinate.column
-
-        if row_idx < 0 or row_idx >= len(self._raw_rows):
-            return
-        if col_idx < 0 or col_idx >= len(self._column_names):
-            return
-
-        col_name = self._column_names[col_idx]
-        raw_value = self._raw_rows[row_idx].get(col_name)
-        full_text = get_raw_value(raw_value)
-
-        try:
-            pyperclip.copy(full_text)
-            self.notify(f"Copied {col_name} value", severity="information")
-        except pyperclip.PyperclipException:
-            self.notify("Clipboard not available", severity="error")
-
-    def action_copy_row(self) -> None:
-        """Copy the selected row as JSON to clipboard."""
-        import json
-
-        table = self.query_one("#result-table", DataTable)
-        if not self._raw_rows:
-            self.notify("No data to copy", severity="warning")
-            return
-
-        row_idx = table.cursor_coordinate.row
-        if row_idx < 0 or row_idx >= len(self._raw_rows):
-            return
-
-        raw_row = self._raw_rows[row_idx]
-        row_json = {k: get_raw_value(v) for k, v in raw_row.items()}
-
-        try:
-            pyperclip.copy(json.dumps(row_json, indent=2))
-            self.notify("Copied row as JSON", severity="information")
-        except pyperclip.PyperclipException:
-            self.notify("Clipboard not available", severity="error")
-
-    def action_export(self) -> None:
-        """Open export dialog."""
-
-        def on_export_result(result: tuple[ExportFormat, Path] | None) -> None:
-            if result is None:
-                return
-            fmt, path = result
-            try:
-                count = export_results(self.bq_client, self.handle, fmt, path)
-                self.notify(f"Exported {count:,} rows to {path}", severity="information")
-            except Exception as e:
-                self.notify(f"Export failed: {e}", severity="error")
-
-        self.push_screen(ExportScreen(), on_export_result)

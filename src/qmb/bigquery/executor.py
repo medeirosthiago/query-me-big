@@ -37,6 +37,11 @@ def execute_query(
     result = job.result()
     total_rows = result.total_rows or 0
 
+    # Compute execution duration
+    execution_seconds = 0.0
+    if job.started and job.ended:
+        execution_seconds = (job.ended - job.started).total_seconds()
+
     dest = job.destination
     dest_str = f"{dest.project}.{dest.dataset_id}.{dest.table_id}" if dest else ""
 
@@ -53,4 +58,5 @@ def execute_query(
         schema=schema,
         total_rows=total_rows,
         bytes_processed=job.total_bytes_processed or 0,
+        execution_seconds=execution_seconds,
     )
