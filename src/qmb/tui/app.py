@@ -7,6 +7,7 @@ import io
 import json
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,6 @@ from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
-    Footer,
     Input,
     Label,
     OptionList,
@@ -84,7 +84,8 @@ class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
                 id="format-list",
             )
             yield Label("Output path:")
-            yield Input(placeholder="output.csv", id="path-input")
+            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            yield Input(placeholder=f"{ts}.csv", id="path-input")
             yield Label("Press Enter to export, Escape to cancel", id="export-hint")
 
     def on_mount(self) -> None:
@@ -95,8 +96,14 @@ class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
         extensions = {0: ".csv", 1: ".json", 2: ".parquet"}
         ext = extensions.get(event.option_index, ".csv")
         inp = self.query_one("#path-input", Input)
-        if not inp.value or inp.value in ("output.csv", "output.json", "output.parquet"):
-            inp.value = f"output{ext}"
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        current = inp.value
+        is_default = not current or any(
+            current.endswith(e) and current[: -len(e)].replace("-", "").replace("_", "").isdigit()
+            for e in extensions.values()
+        )
+        if is_default:
+            inp.value = f"{ts}{ext}"
 
     @on(Input.Submitted, "#path-input")
     def submit_export(self) -> None:
@@ -104,59 +111,11 @@ class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
         idx = format_list.highlighted or 0
         fmt_map = {0: ExportFormat.CSV, 1: ExportFormat.JSON, 2: ExportFormat.PARQUET}
         fmt = fmt_map.get(idx, ExportFormat.CSV)
-        path = Path(self.query_one("#path-input", Input).value or "output.csv")
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = Path(self.query_one("#path-input", Input).value or f"{ts}.csv")
         self.dismiss((fmt, path))
 
     def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class JobDetailScreen(ModalScreen[None]):
-    """Modal showing job execution details."""
-
-    BINDINGS = [Binding("escape,q", "dismiss_screen", "Close")]
-    DEFAULT_CSS = """
-    JobDetailScreen {
-        align: center middle;
-    }
-    #job-dialog {
-        width: 70;
-        height: 20;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    #job-dialog Label {
-        margin-bottom: 1;
-    }
-    """
-
-    def __init__(self, handle: QueryResultHandle, source_label: str) -> None:
-        super().__init__()
-        self._handle = handle
-        self._source_label = source_label
-
-    def compose(self) -> ComposeResult:
-        h = self._handle
-        duration = (
-            f"{h.execution_seconds:.1f}s"
-            if h.execution_seconds < 60
-            else f"{h.execution_seconds / 60:.1f}m"
-        )
-        with Vertical(id="job-dialog"):
-            yield Label("Job Details", id="job-title")
-            yield Label(f"  Source:        {self._source_label}")
-            yield Label(f"  Job ID:        {h.job_id}")
-            yield Label(f"  Project:       {h.project}")
-            yield Label(f"  Location:      {h.location}")
-            yield Label(f"  Destination:   {h.destination_table}")
-            yield Label(f"  Total rows:    {h.total_rows:,}")
-            yield Label(f"  Processed:     {_fmt_bytes(h.bytes_processed)}")
-            yield Label(f"  Duration:      {duration}")
-            yield Label("")
-            yield Label("Press q or Escape to close")
-
-    def action_dismiss_screen(self) -> None:
         self.dismiss(None)
 
 
@@ -183,14 +142,13 @@ class QueryResultApp(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("n", "next_page", "Next"),
-        Binding("p", "prev_page", "Prev"),
-        Binding("v", "vim_cell", "Vim Cell"),
-        Binding("s", "vim_query", "SQL"),
-        Binding("d", "show_job", "Details"),
-        Binding("e", "noop", "Export"),
-        Binding("y", "noop", "Yank"),
+        Binding("q", "quit", "Quit", show=False),
+        Binding("n", "next_page", "Next", show=False),
+        Binding("p", "prev_page", "Prev", show=False),
+        Binding("v", "vim_cell", "Vim Cell", show=False),
+        Binding("s", "vim_query", "SQL", show=False),
+        Binding("d", "vim_job_details", "Details", show=False),
+        Binding("question_mark", "show_help", "Help", show=False),
         Binding("home", "first_page", "First Page", show=False),
         Binding("end", "last_page", "Last Page", show=False),
     ]
@@ -217,16 +175,12 @@ class QueryResultApp(App):
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="result-table")
-        yield Label("Page: 1/1", id="page-bar")
-        yield Footer()
+        yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
     def on_mount(self) -> None:
         table = self.query_one("#result-table", DataTable)
         table.cursor_type = "cell"
         self._load_page(0)
-
-    def action_noop(self) -> None:
-        pass
 
     # -- key handling (hjkl + multi-key sequences) --------------------------
 
@@ -423,7 +377,8 @@ class QueryResultApp(App):
         self.push_screen(ExportScreen(), on_export_result)
 
     def _quick_export(self, fmt: ExportFormat, ext: str) -> None:
-        path = Path(f"output{ext}")
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = Path(f"{ts}{ext}")
         try:
             count = export_results(self.bq_client, self.handle, fmt, path)
             self.notify(f"Exported {count:,} rows to {path}", severity="information")
@@ -432,8 +387,62 @@ class QueryResultApp(App):
 
     # -- job details --------------------------------------------------------
 
-    def action_show_job(self) -> None:
-        self.push_screen(JobDetailScreen(self.handle, self.source_label))
+    def action_vim_job_details(self) -> None:
+        h = self.handle
+        duration = (
+            f"{h.execution_seconds:.1f}s"
+            if h.execution_seconds < 60
+            else f"{h.execution_seconds / 60:.1f}m"
+        )
+        details = "\n".join([
+            "Job Details",
+            "=" * 40,
+            f"  Source:        {self.source_label}",
+            f"  Job ID:        {h.job_id}",
+            f"  Project:       {h.project}",
+            f"  Location:      {h.location}",
+            f"  Destination:   {h.destination_table}",
+            f"  Total rows:    {h.total_rows:,}",
+            f"  Processed:     {_fmt_bytes(h.bytes_processed)}",
+            f"  Duration:      {duration}",
+        ])
+        self._open_in_nvim(details, suffix=".txt", prefix="qmb_job_")
+
+    # -- help ---------------------------------------------------------------
+
+    def action_show_help(self) -> None:
+        help_text = "\n".join([
+            "qmb — Keyboard Shortcuts",
+            "=" * 40,
+            "",
+            "Navigation",
+            "  h/j/k/l       Move left/down/up/right",
+            "  Arrow keys    Move left/down/up/right",
+            "  n             Next page",
+            "  p             Previous page",
+            "  Home          First page",
+            "  End           Last page",
+            "",
+            "Yank (copy)",
+            "  yw            Copy selected cell value",
+            "  yc            Copy selected row as CSV",
+            "  yj            Copy selected row as JSON",
+            "",
+            "Inspect",
+            "  v             Open cell in nvim (read-only)",
+            "  s             Open full SQL query in nvim",
+            "  d             Open job details in nvim",
+            "",
+            "Export",
+            "  e             Open export dialog",
+            "  ec            Quick export to CSV",
+            "  ej            Quick export to JSON",
+            "",
+            "Other",
+            "  ?             Show this help",
+            "  q             Quit",
+        ])
+        self._open_in_nvim(help_text, suffix=".txt", prefix="qmb_help_")
 
     # -- pagination ---------------------------------------------------------
 
@@ -468,7 +477,7 @@ class QueryResultApp(App):
 
     def _update_page_bar(self, result: PageResult) -> None:
         self.query_one("#page-bar", Label).update(
-            f"Page: {result.page + 1}/{result.total_pages}"
+            f"Page: {result.page + 1}/{result.total_pages}  ·  ? for help"
         )
 
     def action_next_page(self) -> None:
