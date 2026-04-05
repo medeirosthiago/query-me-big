@@ -18,7 +18,6 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.events import Key
-from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
     Input,
@@ -42,81 +41,14 @@ def _fmt_bytes(n: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Modal screens
+# Export format options
 # ---------------------------------------------------------------------------
 
-
-class ExportScreen(ModalScreen[tuple[ExportFormat, Path] | None]):
-    """Modal for choosing export format and output path."""
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-    DEFAULT_CSS = """
-    ExportScreen {
-        align: center middle;
-    }
-    #export-dialog {
-        width: 60;
-        height: 18;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    #export-dialog Label {
-        margin-bottom: 1;
-    }
-    #format-list {
-        height: 5;
-        margin-bottom: 1;
-    }
-    #path-input {
-        margin-bottom: 1;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="export-dialog"):
-            yield Label("Export Results", id="export-title")
-            yield Label("Choose format:")
-            yield OptionList(
-                "CSV (.csv)",
-                "JSON (.json)",
-                "Parquet (.parquet)",
-                id="format-list",
-            )
-            yield Label("Output path:")
-            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            yield Input(placeholder=f"{ts}.csv", id="path-input")
-            yield Label("Press Enter to export, Escape to cancel", id="export-hint")
-
-    def on_mount(self) -> None:
-        self.query_one("#format-list", OptionList).highlighted = 0
-
-    @on(OptionList.OptionSelected, "#format-list")
-    def format_selected(self, event: OptionList.OptionSelected) -> None:
-        extensions = {0: ".csv", 1: ".json", 2: ".parquet"}
-        ext = extensions.get(event.option_index, ".csv")
-        inp = self.query_one("#path-input", Input)
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        current = inp.value
-        is_default = not current or any(
-            current.endswith(e) and current[: -len(e)].replace("-", "").replace("_", "").isdigit()
-            for e in extensions.values()
-        )
-        if is_default:
-            inp.value = f"{ts}{ext}"
-
-    @on(Input.Submitted, "#path-input")
-    def submit_export(self) -> None:
-        format_list = self.query_one("#format-list", OptionList)
-        idx = format_list.highlighted or 0
-        fmt_map = {0: ExportFormat.CSV, 1: ExportFormat.JSON, 2: ExportFormat.PARQUET}
-        fmt = fmt_map.get(idx, ExportFormat.CSV)
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        path = Path(self.query_one("#path-input", Input).value or f"{ts}.csv")
-        self.dismiss((fmt, path))
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+_EXPORT_OPTIONS: list[tuple[ExportFormat, str, str]] = [
+    (ExportFormat.CSV, "CSV (.csv)", ".csv"),
+    (ExportFormat.JSON, "JSON (.json)", ".json"),
+    (ExportFormat.PARQUET, "Parquet (.parquet)", ".parquet"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -139,16 +71,16 @@ class QueryResultApp(App):
         background: $boost;
         padding: 0 1;
     }
-    #column-picker {
+    #column-picker, #export-picker {
         display: none;
         height: auto;
         max-height: 16;
         border: tall $accent;
     }
-    #column-filter {
+    #column-filter, #export-filter {
         height: 3;
     }
-    #column-list {
+    #column-list, #export-list {
         height: auto;
         max-height: 12;
     }
@@ -193,12 +125,17 @@ class QueryResultApp(App):
         self._cell_matches: list[tuple[int, int]] = []
         self._match_idx: int = -1
         self._filtered_columns: list[int] = []
+        self._filtered_exports: list[int] = []
+        self._export_format: ExportFormat | None = None
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="result-table")
         with Vertical(id="column-picker"):
             yield Input(placeholder="Filter columns…", id="column-filter")
             yield OptionList(id="column-list")
+        with Vertical(id="export-picker"):
+            yield Input(placeholder="Filter formats…", id="export-filter")
+            yield OptionList(id="export-list")
         yield Input(placeholder="Search value…", id="cell-search")
         yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
@@ -214,36 +151,49 @@ class QueryResultApp(App):
 
     # -- key handling (hjkl + multi-key sequences) --------------------------
 
-    def _search_active(self) -> bool:
+    def _picker_active(self) -> bool:
         return (
             self.query_one("#column-picker", Vertical).display
+            or self.query_one("#export-picker", Vertical).display
             or self.query_one("#cell-search", Input).display
         )
 
-    def _dismiss_search(self) -> None:
+    def _dismiss_picker(self) -> None:
         self.query_one("#column-picker", Vertical).display = False
+        self.query_one("#export-picker", Vertical).display = False
+        self.query_one("#export-list", OptionList).display = True
         self.query_one("#cell-search", Input).display = False
+        self._export_format = None
         self.query_one("#result-table", DataTable).focus()
 
+    def _navigate_option_list(self, list_id: str, event: Key) -> None:
+        opt = self.query_one(list_id, OptionList)
+        if opt.option_count == 0:
+            return
+        idx = opt.highlighted or 0
+        if event.key == "down":
+            opt.highlighted = min(idx + 1, opt.option_count - 1)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "up":
+            opt.highlighted = max(idx - 1, 0)
+            event.prevent_default()
+            event.stop()
+
     def on_key(self, event: Key) -> None:
-        # When a search input is focused, handle escape and arrow navigation
-        if self._search_active():
+        # When a picker is focused, handle escape and arrow navigation
+        if self._picker_active():
             if event.key == "escape":
-                self._dismiss_search()
+                self._dismiss_picker()
                 event.prevent_default()
                 event.stop()
             elif self.query_one("#column-picker", Vertical).display:
-                col_list = self.query_one("#column-list", OptionList)
-                if event.key == "down" and col_list.option_count > 0:
-                    idx = col_list.highlighted or 0
-                    col_list.highlighted = min(idx + 1, col_list.option_count - 1)
-                    event.prevent_default()
-                    event.stop()
-                elif event.key == "up" and col_list.option_count > 0:
-                    idx = col_list.highlighted or 0
-                    col_list.highlighted = max(idx - 1, 0)
-                    event.prevent_default()
-                    event.stop()
+                self._navigate_option_list("#column-list", event)
+            elif (
+                self.query_one("#export-picker", Vertical).display
+                and self._export_format is None
+            ):
+                self._navigate_option_list("#export-list", event)
             return
 
         # Escape clears search matches
@@ -279,7 +229,7 @@ class QueryResultApp(App):
                 event.stop()
                 self._quick_export(ExportFormat.JSON, ".json")
             else:
-                self._open_export_modal()
+                self._open_export_picker()
             return
 
         # First key — start sequence, search, or navigate
@@ -343,7 +293,7 @@ class QueryResultApp(App):
     def _on_pending_timeout(self) -> None:
         if self._pending_key == "e":
             self._pending_key = None
-            self._open_export_modal()
+            self._open_export_picker()
         elif self._pending_key == "y":
             self._pending_key = None
 
@@ -355,7 +305,7 @@ class QueryResultApp(App):
     @on(Input.Submitted, "#cell-search")
     def _on_cell_search(self, event: Input.Submitted) -> None:
         query = event.value.strip().lower()
-        self._dismiss_search()
+        self._dismiss_picker()
         if not query:
             return
 
@@ -407,7 +357,7 @@ class QueryResultApp(App):
         if self._filtered_columns and col_list.highlighted is not None:
             self._select_column(col_list.highlighted)
         else:
-            self._dismiss_search()
+            self._dismiss_picker()
 
     @on(OptionList.OptionSelected, "#column-list")
     def _on_column_selected(self, event: OptionList.OptionSelected) -> None:
@@ -417,7 +367,7 @@ class QueryResultApp(App):
         if option_idx < 0 or option_idx >= len(self._filtered_columns):
             return
         col_idx = self._filtered_columns[option_idx]
-        self._dismiss_search()
+        self._dismiss_picker()
         table = self.query_one("#result-table", DataTable)
         table.move_cursor(column=col_idx + 1)
         self.notify(f"→ {self._column_names[col_idx]}")
@@ -543,20 +493,73 @@ class QueryResultApp(App):
 
         Path(tmp_path).unlink(missing_ok=True)
 
-    # -- export -------------------------------------------------------------
+    # -- export picker ------------------------------------------------------
 
-    def _open_export_modal(self) -> None:
-        def on_export_result(result: tuple[ExportFormat, Path] | None) -> None:
-            if result is None:
-                return
-            fmt, path = result
-            try:
-                count = export_results(self.bq_client, self.handle, fmt, path)
-                self.notify(f"Exported {count:,} rows to {path}", severity="information")
-            except Exception as e:
-                self.notify(f"Export failed: {e}", severity="error")
+    def _open_export_picker(self) -> None:
+        self._export_format = None
+        picker = self.query_one("#export-picker", Vertical)
+        inp = self.query_one("#export-filter", Input)
+        inp.value = ""
+        inp.placeholder = "Filter formats…"
+        picker.display = True
+        self._populate_export_list("")
+        inp.focus()
 
-        self.push_screen(ExportScreen(), on_export_result)
+    def _populate_export_list(self, query: str) -> None:
+        opt = self.query_one("#export-list", OptionList)
+        opt.clear_options()
+        self._filtered_exports.clear()
+        q = query.strip().lower()
+        for i, (_, label, _) in enumerate(_EXPORT_OPTIONS):
+            if not q or q in label.lower():
+                opt.add_option(label)
+                self._filtered_exports.append(i)
+        if self._filtered_exports:
+            opt.highlighted = 0
+
+    @on(Input.Changed, "#export-filter")
+    def _on_export_filter_changed(self, event: Input.Changed) -> None:
+        if self._export_format is not None:
+            return
+        self._populate_export_list(event.value)
+
+    @on(Input.Submitted, "#export-filter")
+    def _on_export_filter_submitted(self, event: Input.Submitted) -> None:
+        if self._export_format is None:
+            opt = self.query_one("#export-list", OptionList)
+            if self._filtered_exports and opt.highlighted is not None:
+                self._select_export_format(opt.highlighted)
+            return
+        # Phase 2: path submitted — do the export
+        inp = self.query_one("#export-filter", Input)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ext = next(e for f, _, e in _EXPORT_OPTIONS if f == self._export_format)
+        path = Path(inp.value or f"{ts}{ext}")
+        self._dismiss_picker()
+        try:
+            count = export_results(self.bq_client, self.handle, self._export_format, path)
+            self.notify(f"Exported {count:,} rows to {path}", severity="information")
+        except Exception as exc:
+            self.notify(f"Export failed: {exc}", severity="error")
+
+    @on(OptionList.OptionSelected, "#export-list")
+    def _on_export_selected(self, event: OptionList.OptionSelected) -> None:
+        self._select_export_format(event.option_index)
+
+    def _select_export_format(self, option_idx: int) -> None:
+        if option_idx < 0 or option_idx >= len(self._filtered_exports):
+            return
+        i = self._filtered_exports[option_idx]
+        fmt, _, ext = _EXPORT_OPTIONS[i]
+        self._export_format = fmt
+        # Switch to path entry phase
+        opt = self.query_one("#export-list", OptionList)
+        opt.display = False
+        inp = self.query_one("#export-filter", Input)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        inp.placeholder = "Output path…"
+        inp.value = f"{ts}{ext}"
+        inp.focus()
 
     def _quick_export(self, fmt: ExportFormat, ext: str) -> None:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
