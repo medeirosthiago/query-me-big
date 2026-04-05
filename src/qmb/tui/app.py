@@ -191,6 +191,11 @@ class QueryResultApp(App):
         table.cursor_type = "cell"
         self._load_page(0)
 
+    @on(DataTable.CellHighlighted)
+    def _enforce_min_column(self, event: DataTable.CellHighlighted) -> None:
+        if self._column_names and event.coordinate.column == 0:
+            self.query_one("#result-table", DataTable).move_cursor(column=1)
+
     # -- key handling (hjkl + multi-key sequences) --------------------------
 
     def _search_active(self) -> bool:
@@ -357,7 +362,7 @@ class QueryResultApp(App):
         table = self.query_one("#result-table", DataTable)
         for col_idx, col_name in enumerate(self._column_names):
             if query in col_name.lower():
-                table.move_cursor(column=col_idx)
+                table.move_cursor(column=col_idx + 1)
                 self.notify(f"→ {col_name}")
                 return
 
@@ -369,9 +374,13 @@ class QueryResultApp(App):
         self._match_idx = (self._match_idx + direction) % len(self._cell_matches)
         row_idx, col_idx = self._cell_matches[self._match_idx]
         table = self.query_one("#result-table", DataTable)
-        table.move_cursor(row=row_idx, column=col_idx)
+        table.move_cursor(row=row_idx, column=col_idx + 1)
 
     # -- clipboard ----------------------------------------------------------
+
+    def _data_col(self) -> int:
+        """Map DataTable column index to data column index (skip row-number col)."""
+        return self.query_one("#result-table", DataTable).cursor_coordinate.column - 1
 
     def _copy_cell(self) -> None:
         table = self.query_one("#result-table", DataTable)
@@ -380,7 +389,7 @@ class QueryResultApp(App):
             return
 
         row_idx = table.cursor_coordinate.row
-        col_idx = table.cursor_coordinate.column
+        col_idx = self._data_col()
         if row_idx < 0 or row_idx >= len(self._raw_rows):
             return
         if col_idx < 0 or col_idx >= len(self._column_names):
@@ -446,7 +455,7 @@ class QueryResultApp(App):
             return
 
         row_idx = table.cursor_coordinate.row
-        col_idx = table.cursor_coordinate.column
+        col_idx = self._data_col()
         if row_idx < 0 or row_idx >= len(self._raw_rows):
             return
         if col_idx < 0 or col_idx >= len(self._column_names):
@@ -592,13 +601,16 @@ class QueryResultApp(App):
             self._update_page_bar(result)
             return
 
+        table.add_column("#", key="_row_num")
         for col_info in self.handle.schema:
             col_name = col_info["name"]
             self._column_names.append(col_name)
             table.add_column(col_name, key=col_name)
 
-        for display_row in result.display_rows:
-            values = [display_row.get(col, "") for col in self._column_names]
+        row_offset = result.page * self.page_size
+        for i, display_row in enumerate(result.display_rows):
+            values = [str(row_offset + i + 1)]
+            values.extend(display_row.get(col, "") for col in self._column_names)
             table.add_row(*values)
 
         self._update_page_bar(result)
