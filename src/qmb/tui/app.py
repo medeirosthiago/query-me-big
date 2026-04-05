@@ -139,7 +139,20 @@ class QueryResultApp(App):
         background: $boost;
         padding: 0 1;
     }
-    #column-search, #cell-search {
+    #column-picker {
+        display: none;
+        height: auto;
+        max-height: 16;
+        border: tall $accent;
+    }
+    #column-filter {
+        height: 3;
+    }
+    #column-list {
+        height: auto;
+        max-height: 12;
+    }
+    #cell-search {
         display: none;
         height: 3;
         border: tall $accent;
@@ -179,10 +192,13 @@ class QueryResultApp(App):
         self._pending_key: str | None = None
         self._cell_matches: list[tuple[int, int]] = []
         self._match_idx: int = -1
+        self._filtered_columns: list[int] = []
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="result-table")
-        yield Input(placeholder="Column name…", id="column-search")
+        with Vertical(id="column-picker"):
+            yield Input(placeholder="Filter columns…", id="column-filter")
+            yield OptionList(id="column-list")
         yield Input(placeholder="Search value…", id="cell-search")
         yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
@@ -200,22 +216,34 @@ class QueryResultApp(App):
 
     def _search_active(self) -> bool:
         return (
-            self.query_one("#column-search", Input).display
+            self.query_one("#column-picker", Vertical).display
             or self.query_one("#cell-search", Input).display
         )
 
     def _dismiss_search(self) -> None:
-        self.query_one("#column-search", Input).display = False
+        self.query_one("#column-picker", Vertical).display = False
         self.query_one("#cell-search", Input).display = False
         self.query_one("#result-table", DataTable).focus()
 
     def on_key(self, event: Key) -> None:
-        # When a search input is focused, only handle escape
+        # When a search input is focused, handle escape and arrow navigation
         if self._search_active():
             if event.key == "escape":
                 self._dismiss_search()
                 event.prevent_default()
                 event.stop()
+            elif self.query_one("#column-picker", Vertical).display:
+                col_list = self.query_one("#column-list", OptionList)
+                if event.key == "down" and col_list.option_count > 0:
+                    idx = col_list.highlighted or 0
+                    col_list.highlighted = min(idx + 1, col_list.option_count - 1)
+                    event.prevent_default()
+                    event.stop()
+                elif event.key == "up" and col_list.option_count > 0:
+                    idx = col_list.highlighted or 0
+                    col_list.highlighted = max(idx - 1, 0)
+                    event.prevent_default()
+                    event.stop()
             return
 
         # Escape clears search matches
@@ -279,10 +307,7 @@ class QueryResultApp(App):
             return
 
         if event.key == "f":
-            search = self.query_one("#column-search", Input)
-            search.value = ""
-            search.display = True
-            search.focus()
+            self._open_column_picker()
             event.prevent_default()
             event.stop()
             return
@@ -352,21 +377,50 @@ class QueryResultApp(App):
         else:
             self.notify("No matches found", severity="warning")
 
-    @on(Input.Submitted, "#column-search")
-    def _on_column_search(self, event: Input.Submitted) -> None:
-        query = event.value.strip().lower()
-        self._dismiss_search()
-        if not query:
-            return
+    def _open_column_picker(self) -> None:
+        picker = self.query_one("#column-picker", Vertical)
+        col_filter = self.query_one("#column-filter", Input)
+        col_filter.value = ""
+        picker.display = True
+        self._populate_column_list("")
+        col_filter.focus()
 
-        table = self.query_one("#result-table", DataTable)
+    def _populate_column_list(self, query: str) -> None:
+        col_list = self.query_one("#column-list", OptionList)
+        col_list.clear_options()
+        self._filtered_columns.clear()
+        q = query.strip().lower()
         for col_idx, col_name in enumerate(self._column_names):
-            if query in col_name.lower():
-                table.move_cursor(column=col_idx + 1)
-                self.notify(f"→ {col_name}")
-                return
+            if not q or q in col_name.lower():
+                col_list.add_option(col_name)
+                self._filtered_columns.append(col_idx)
+        if self._filtered_columns:
+            col_list.highlighted = 0
 
-        self.notify(f"No column matching '{query}'", severity="warning")
+    @on(Input.Changed, "#column-filter")
+    def _on_column_filter_changed(self, event: Input.Changed) -> None:
+        self._populate_column_list(event.value)
+
+    @on(Input.Submitted, "#column-filter")
+    def _on_column_filter_submitted(self, event: Input.Submitted) -> None:
+        col_list = self.query_one("#column-list", OptionList)
+        if self._filtered_columns and col_list.highlighted is not None:
+            self._select_column(col_list.highlighted)
+        else:
+            self._dismiss_search()
+
+    @on(OptionList.OptionSelected, "#column-list")
+    def _on_column_selected(self, event: OptionList.OptionSelected) -> None:
+        self._select_column(event.option_index)
+
+    def _select_column(self, option_idx: int) -> None:
+        if option_idx < 0 or option_idx >= len(self._filtered_columns):
+            return
+        col_idx = self._filtered_columns[option_idx]
+        self._dismiss_search()
+        table = self.query_one("#result-table", DataTable)
+        table.move_cursor(column=col_idx + 1)
+        self.notify(f"→ {self._column_names[col_idx]}")
 
     def _goto_match(self, direction: int) -> None:
         if not self._cell_matches:
