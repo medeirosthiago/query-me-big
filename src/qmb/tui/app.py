@@ -141,7 +141,8 @@ class QueryResultApp(App):
     }
     #column-search, #cell-search {
         display: none;
-        height: 1;
+        height: 3;
+        border: tall $accent;
     }
     """
 
