@@ -139,6 +139,10 @@ class QueryResultApp(App):
         background: $boost;
         padding: 0 1;
     }
+    #column-search, #cell-search {
+        display: none;
+        height: 1;
+    }
     """
 
     BINDINGS = [
@@ -172,9 +176,13 @@ class QueryResultApp(App):
         self._raw_rows: list[dict[str, Any]] = []
         self._column_names: list[str] = []
         self._pending_key: str | None = None
+        self._cell_matches: list[tuple[int, int]] = []
+        self._match_idx: int = -1
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="result-table")
+        yield Input(placeholder="Column name…", id="column-search")
+        yield Input(placeholder="Search value…", id="cell-search")
         yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
     def on_mount(self) -> None:
@@ -184,7 +192,35 @@ class QueryResultApp(App):
 
     # -- key handling (hjkl + multi-key sequences) --------------------------
 
+    def _search_active(self) -> bool:
+        return (
+            self.query_one("#column-search", Input).display
+            or self.query_one("#cell-search", Input).display
+        )
+
+    def _dismiss_search(self) -> None:
+        self.query_one("#column-search", Input).display = False
+        self.query_one("#cell-search", Input).display = False
+        self.query_one("#result-table", DataTable).focus()
+
     def on_key(self, event: Key) -> None:
+        # When a search input is focused, only handle escape
+        if self._search_active():
+            if event.key == "escape":
+                self._dismiss_search()
+                event.prevent_default()
+                event.stop()
+            return
+
+        # Escape clears search matches
+        if event.key == "escape" and self._cell_matches:
+            self._cell_matches.clear()
+            self._match_idx = -1
+            self.notify("Search cleared")
+            event.prevent_default()
+            event.stop()
+            return
+
         # Second key of a pending sequence
         if self._pending_key == "y":
             self._clear_pending()
@@ -212,7 +248,7 @@ class QueryResultApp(App):
                 self._open_export_modal()
             return
 
-        # First key — start sequence or navigate
+        # First key — start sequence, search, or navigate
         if event.key == "y":
             self._pending_key = "y"
             self.set_timer(0.4, self._on_pending_timeout)
@@ -223,6 +259,37 @@ class QueryResultApp(App):
         if event.key == "e":
             self._pending_key = "e"
             self.set_timer(0.4, self._on_pending_timeout)
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "slash":
+            search = self.query_one("#cell-search", Input)
+            search.value = ""
+            search.display = True
+            search.focus()
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "f":
+            search = self.query_one("#column-search", Input)
+            search.value = ""
+            search.display = True
+            search.focus()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # n/N — next/prev match when search is active, else page navigation
+        if event.key == "n" and self._cell_matches:
+            self._goto_match(1)
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "N" and self._cell_matches:
+            self._goto_match(-1)
             event.prevent_default()
             event.stop()
             return
@@ -251,6 +318,57 @@ class QueryResultApp(App):
 
     def _clear_pending(self) -> None:
         self._pending_key = None
+
+    # -- search -------------------------------------------------------------
+
+    @on(Input.Submitted, "#cell-search")
+    def _on_cell_search(self, event: Input.Submitted) -> None:
+        query = event.value.strip().lower()
+        self._dismiss_search()
+        if not query:
+            return
+
+        matches: list[tuple[int, int]] = []
+        for row_idx, raw_row in enumerate(self._raw_rows):
+            for col_idx, col_name in enumerate(self._column_names):
+                val = str(raw_row.get(col_name, "")).lower()
+                if query in val:
+                    matches.append((row_idx, col_idx))
+
+        self._cell_matches = matches
+        self._match_idx = -1
+
+        if matches:
+            self._goto_match(1)
+            self.notify(
+                f"{len(matches)} match{'es' if len(matches) != 1 else ''} · n/N to cycle"
+            )
+        else:
+            self.notify("No matches found", severity="warning")
+
+    @on(Input.Submitted, "#column-search")
+    def _on_column_search(self, event: Input.Submitted) -> None:
+        query = event.value.strip().lower()
+        self._dismiss_search()
+        if not query:
+            return
+
+        table = self.query_one("#result-table", DataTable)
+        for col_idx, col_name in enumerate(self._column_names):
+            if query in col_name.lower():
+                table.move_cursor(column=col_idx)
+                self.notify(f"→ {col_name}")
+                return
+
+        self.notify(f"No column matching '{query}'", severity="warning")
+
+    def _goto_match(self, direction: int) -> None:
+        if not self._cell_matches:
+            return
+        self._match_idx = (self._match_idx + direction) % len(self._cell_matches)
+        row_idx, col_idx = self._cell_matches[self._match_idx]
+        table = self.query_one("#result-table", DataTable)
+        table.move_cursor(row=row_idx, column=col_idx)
 
     # -- clipboard ----------------------------------------------------------
 
@@ -418,10 +536,17 @@ class QueryResultApp(App):
             "Navigation",
             "  h/j/k/l       Move left/down/up/right",
             "  Arrow keys    Move left/down/up/right",
-            "  n             Next page",
+            "  n             Next page (or next match)",
+            "  N             Previous match",
             "  p             Previous page",
             "  Home          First page",
             "  End           Last page",
+            "",
+            "Search",
+            "  /             Search cell values",
+            "  f             Search column name",
+            "  n/N           Next/previous match",
+            "  Escape        Clear search",
             "",
             "Yank (copy)",
             "  yw            Copy selected cell value",
@@ -458,6 +583,8 @@ class QueryResultApp(App):
         self.current_page = result.page
         self._raw_rows = result.rows
         self._column_names = []
+        self._cell_matches.clear()
+        self._match_idx = -1
 
         if not result.display_rows:
             table.add_column("(no results)")
