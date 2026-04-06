@@ -89,6 +89,8 @@ qmb --file queries/my_query.sql --resolve-dbt --manifest target/manifest.json
 
 If `--manifest` is omitted, qmb auto-discovers `target/manifest.json` from the current directory and parent directories.
 
+**Auto-detection:** When a `.sql` file lives inside a dbt project (parent `dbt_project.yml`) or `DBT_MODEL_PATH`/`DBT_PROJECT_DIR` env vars are set, `--resolve-dbt` is enabled automatically. If the file matches a manifest node, qmb uses the compiled SQL (after `dbt compile`) or falls back to raw SQL with `ref()`/`source()`/`var()` resolution.
+
 ### dbt model
 
 Query a dbt model using its compiled SQL from `manifest.json`:
@@ -155,6 +157,10 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | Key | Action |
 |---|---|
 | `h` `j` `k` `l` / Arrow keys | Move left/down/up/right |
+| `gg` | Go to first row |
+| `G` | Go to last row |
+| `0` | Go to first column |
+| `$` | Go to last column |
 | `n` | Next page (or next search match) |
 | `N` | Previous search match |
 | `p` | Previous page |
