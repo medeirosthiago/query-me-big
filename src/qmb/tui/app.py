@@ -95,7 +95,7 @@ class QueryResultApp(App):
         Binding("q", "quit", "Quit", show=False),
         Binding("n", "next_page", "Next", show=False),
         Binding("p", "prev_page", "Prev", show=False),
-        Binding("v", "vim_cell", "Vim Cell", show=False),
+        Binding("e", "vim_cell", "Edit", show=False),
         Binding("s", "vim_query", "SQL", show=False),
         Binding("d", "vim_job_details", "Details", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
@@ -162,6 +162,7 @@ class QueryResultApp(App):
         self.query_one("#column-picker", Vertical).display = False
         self.query_one("#export-picker", Vertical).display = False
         self.query_one("#export-list", OptionList).display = True
+        self.query_one("#export-filter", Input).display = True
         self.query_one("#cell-search", Input).display = False
         self._export_format = None
         self.query_one("#result-table", DataTable).focus()
@@ -189,11 +190,6 @@ class QueryResultApp(App):
                 event.stop()
             elif self.query_one("#column-picker", Vertical).display:
                 self._navigate_option_list("#column-list", event)
-            elif (
-                self.query_one("#export-picker", Vertical).display
-                and self._export_format is None
-            ):
-                self._navigate_option_list("#export-list", event)
             return
 
         # Escape clears search matches
@@ -218,7 +214,7 @@ class QueryResultApp(App):
                 self._copy_row_json()
             return
 
-        if self._pending_key == "e":
+        if self._pending_key == "x":
             self._clear_pending()
             if event.key == "c":
                 event.prevent_default()
@@ -240,8 +236,8 @@ class QueryResultApp(App):
             event.stop()
             return
 
-        if event.key == "e":
-            self._pending_key = "e"
+        if event.key == "x":
+            self._pending_key = "x"
             self.set_timer(0.4, self._on_pending_timeout)
             event.prevent_default()
             event.stop()
@@ -291,7 +287,7 @@ class QueryResultApp(App):
             event.prevent_default()
 
     def _on_pending_timeout(self) -> None:
-        if self._pending_key == "e":
+        if self._pending_key == "x":
             self._pending_key = None
             self._open_export_picker()
         elif self._pending_key == "y":
@@ -499,11 +495,12 @@ class QueryResultApp(App):
         self._export_format = None
         picker = self.query_one("#export-picker", Vertical)
         inp = self.query_one("#export-filter", Input)
-        inp.value = ""
-        inp.placeholder = "Filter formats…"
+        opt = self.query_one("#export-list", OptionList)
+        inp.display = False
+        opt.display = True
         picker.display = True
         self._populate_export_list("")
-        inp.focus()
+        opt.focus()
 
     def _populate_export_list(self, query: str) -> None:
         opt = self.query_one("#export-list", OptionList)
@@ -556,6 +553,7 @@ class QueryResultApp(App):
         opt = self.query_one("#export-list", OptionList)
         opt.display = False
         inp = self.query_one("#export-filter", Input)
+        inp.display = True
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         inp.placeholder = "Output path…"
         inp.value = f"{ts}{ext}"
@@ -621,14 +619,14 @@ class QueryResultApp(App):
             "  yj            Copy selected row as JSON",
             "",
             "Inspect",
-            "  v             Open cell in nvim (read-only)",
+            "  e             Open cell in nvim (read-only)",
             "  s             Open full SQL query in nvim",
             "  d             Open job details in nvim",
             "",
             "Export",
-            "  e             Open export dialog",
-            "  ec            Quick export to CSV",
-            "  ej            Quick export to JSON",
+            "  x             Open export picker",
+            "  xc            Quick export to CSV",
+            "  xj            Quick export to JSON",
             "",
             "Other",
             "  ?             Show this help",
