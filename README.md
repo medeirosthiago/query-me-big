@@ -17,28 +17,30 @@ Requires Python 3.11+ and Google Cloud credentials configured (`gcloud auth appl
 Run an inline query and browse results in the TUI:
 
 ```bash
-qmb run --sql "SELECT * FROM \`project.dataset.table\` LIMIT 1000"
+qmb --sql "SELECT * FROM \`project.dataset.table\` LIMIT 1000"
 ```
 
 ### Query from a `.sql` file
 
 ```bash
-qmb run --file queries/my_query.sql
+qmb --file queries/my_query.sql
 ```
 
 If your `.sql` file contains dbt `ref()`, `source()`, or `var()` calls, resolve them with:
 
 ```bash
-qmb run --file queries/my_query.sql --resolve-dbt --manifest target/manifest.json
+qmb --file queries/my_query.sql --resolve-dbt --manifest target/manifest.json
 ```
+
+If `--manifest` is omitted, qmb auto-discovers `target/manifest.json` from the current directory and parent directories.
 
 ### dbt model
 
 Query a dbt model using its compiled SQL from `manifest.json`:
 
 ```bash
-qmb run --model orders
-qmb run --model orders --manifest path/to/manifest.json
+qmb --model orders
+qmb --model orders --manifest path/to/manifest.json
 ```
 
 If `--manifest` is omitted, qmb looks for `target/manifest.json` in the current directory and parent directories.
@@ -46,15 +48,17 @@ If `--manifest` is omitted, qmb looks for `target/manifest.json` in the current 
 Override dbt variables:
 
 ```bash
-qmb run --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
+qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
 ```
+
+When using `--model` with `--var`, qmb resolves the model SQL directly. If the model relies on other dbt Jinja macros, run `dbt compile --vars ...` first and query the compiled model without `--var`.
 
 ### Dry run
 
 Validate a query and see estimated bytes without executing:
 
 ```bash
-qmb run --sql "SELECT * FROM \`project.dataset.table\`" --dry-run
+qmb --sql "SELECT * FROM \`project.dataset.table\`" --dry-run
 ```
 
 ### Export from CLI
@@ -62,9 +66,9 @@ qmb run --sql "SELECT * FROM \`project.dataset.table\`" --dry-run
 Export directly without opening the TUI:
 
 ```bash
-qmb run --sql "SELECT 1" --export csv --out results.csv --no-tui
-qmb run --model orders --export json --out orders.json --no-tui
-qmb run --file query.sql --export parquet --out data.parquet --no-tui
+qmb --sql "SELECT 1" --export csv --out results.csv --no-tui
+qmb --model orders --export json --out orders.json --no-tui
+qmb --file query.sql --export parquet --out data.parquet --no-tui
 ```
 
 If `--out` is omitted, defaults to `output.<ext>`.
@@ -137,5 +141,5 @@ If `--out` is omitted, defaults to `output.<ext>`.
 
 | Key | Action |
 |---|---|
-| `?` | Show all shortcuts in nvim |
+| `?` | Show all shortcuts |
 | `q` | Quit |

@@ -37,7 +37,7 @@ class QueryRequest:
     model_name: str | None = None
     manifest_path: Path | None = None
     resolve_dbt: bool = False
-    variables: dict[str, str] = field(default_factory=dict)
+    variables: dict[str, Any] = field(default_factory=dict)
     project: str | None = None
     location: str | None = None
     page_size: int = 200

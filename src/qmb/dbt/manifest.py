@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 PREFERRED_PROJECT_DIR_NAMES = ("dbt", "analytics", "transform", "transforms")
-SKIP_DISCOVERY_DIRS = {".git", ".venv", "dbt_packages", "logs", "node_modules", "__pycache__"}
 
 
 @dataclass
@@ -37,10 +36,8 @@ class ManifestSource:
 
 @dataclass
 class ManifestIndex:
-    nodes_by_name: dict[str, ManifestNode] = field(default_factory=dict)
     nodes_by_id: dict[str, ManifestNode] = field(default_factory=dict)
     sources_by_key: dict[tuple[str, str], ManifestSource] = field(default_factory=dict)
-    sources_by_id: dict[str, ManifestSource] = field(default_factory=dict)
     project_vars: dict[str, Any] = field(default_factory=dict)
     project_name: str = ""
 
@@ -108,7 +105,6 @@ def load_manifest(path: Path) -> ManifestIndex:
             depends_on_nodes=node.get("depends_on", {}).get("nodes", []),
         )
         index.nodes_by_id[unique_id] = mn
-        index.nodes_by_name[mn.name] = mn
 
     # Sources
     for unique_id, source in raw.get("sources", {}).items():
@@ -120,7 +116,6 @@ def load_manifest(path: Path) -> ManifestIndex:
             schema_name=source.get("schema"),
             identifier=source.get("identifier"),
         )
-        index.sources_by_id[unique_id] = ms
         index.sources_by_key[(ms.source_name, ms.name)] = ms
 
     return index

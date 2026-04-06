@@ -1,7 +1,10 @@
 """CLI entrypoint for qmb."""
 
+from __future__ import annotations
+
+import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -19,17 +22,38 @@ app = typer.Typer(
 )
 console = Console()
 
+_INT_PATTERN = re.compile(r"[+-]?(?:0|[1-9]\d*)\Z")
+_FLOAT_PATTERN = re.compile(
+    r"[+-]?(?:\d+\.\d*|\d*\.\d+|\d+[eE][+-]?\d+|\d+\.\d*[eE][+-]?\d+|\d*\.\d+[eE][+-]?\d+)\Z"
+)
 
-def _parse_vars(var_list: list[str] | None) -> dict[str, str]:
+
+def _coerce_var_value(raw_value: str) -> Any:
+    """Parse a CLI var into a conservative Python scalar."""
+    lowered = raw_value.casefold()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    if _INT_PATTERN.fullmatch(raw_value):
+        return int(raw_value)
+    if _FLOAT_PATTERN.fullmatch(raw_value):
+        return float(raw_value)
+    return raw_value
+
+
+def _parse_vars(var_list: list[str] | None) -> dict[str, Any]:
     """Parse --var key=value pairs."""
     if not var_list:
         return {}
-    variables: dict[str, str] = {}
+    variables: dict[str, Any] = {}
     for item in var_list:
         if "=" not in item:
             raise typer.BadParameter(f"Invalid --var format: '{item}'. Use key=value.")
         key, _, value = item.partition("=")
-        variables[key.strip()] = value.strip()
+        variables[key.strip()] = _coerce_var_value(value.strip())
     return variables
 
 
@@ -120,15 +144,16 @@ def run(
                 raise typer.BadParameter(f"File not found: {file}")
     else:
         mode = InputMode.MODEL
-        if not manifest:
-            # Try to discover manifest
-            from qmb.dbt.manifest import discover_manifest_path
 
-            try:
-                manifest = discover_manifest_path()
-                console.print(f"[dim]Using manifest: {manifest}[/dim]")
-            except FileNotFoundError as e:
-                raise typer.BadParameter(str(e)) from e
+    needs_manifest = mode == InputMode.MODEL or (mode == InputMode.FILE and resolve_dbt)
+    if needs_manifest and not manifest:
+        from qmb.dbt.manifest import discover_manifest_path
+
+        try:
+            manifest = discover_manifest_path()
+            console.print(f"[dim]Using manifest: {manifest}[/dim]")
+        except FileNotFoundError as e:
+            raise typer.BadParameter(str(e)) from e
 
     # Parse export format
     export_format = None
@@ -240,11 +265,12 @@ def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
 
         resolved = load_sql(request)
 
-        if request.resolve_dbt and request.manifest_path:
-            from qmb.dbt.manifest import load_manifest
+        if request.resolve_dbt:
+            from qmb.dbt.manifest import discover_manifest_path, load_manifest
             from qmb.dbt.resolver import resolve_file_sql
 
-            index = load_manifest(request.manifest_path)
+            manifest_path = request.manifest_path or discover_manifest_path()
+            index = load_manifest(manifest_path)
             return resolve_file_sql(
                 resolved.sql,
                 index,

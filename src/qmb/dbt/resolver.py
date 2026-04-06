@@ -28,15 +28,30 @@ VAR_NO_DEFAULT_PATTERN = re.compile(
 
 # Detect unsupported Jinja
 UNSUPPORTED_JINJA = re.compile(r"\{[%{].*?[%}]\}")
+CONFIG_PATTERN = re.compile(r"\{\{\-?\s*config\(.*?\)\s*\-?\}\}", re.IGNORECASE | re.DOTALL)
 
 
 def resolve_model_query(
     model_selector: str,
     index: ManifestIndex,
-    variables: dict[str, str] | None = None,
+    variables: dict[str, Any] | None = None,
 ) -> ResolvedQuery:
     """Resolve a --model selector to executable SQL using compiled_code."""
+    variables = variables or {}
     node = resolve_model(model_selector, index)
+    source_label = f"model: {node.name} ({node.unique_id})"
+
+    if variables:
+        if not node.raw_code:
+            raise ValueError(
+                f"Model '{model_selector}' ({node.unique_id}) has no raw_code for var resolution."
+            )
+        return resolve_file_sql(
+            _strip_config_blocks(node.raw_code),
+            index,
+            variables,
+            source_label=source_label,
+        )
 
     sql = node.compiled_code
     if not sql:
@@ -47,14 +62,14 @@ def resolve_model_query(
 
     return ResolvedQuery(
         sql=normalize_sql(sql),
-        source_label=f"model: {node.name} ({node.unique_id})",
+        source_label=source_label,
     )
 
 
 def resolve_file_sql(
     raw_sql: str,
     index: ManifestIndex,
-    variables: dict[str, str] | None = None,
+    variables: dict[str, Any] | None = None,
     source_label: str = "file",
 ) -> ResolvedQuery:
     """Resolve ref/source/var patterns in a raw SQL file."""
@@ -86,7 +101,7 @@ def resolve_file_sql(
         raise ValueError(
             f"Unsupported Jinja found: {samples}. "
             "This tool supports only ref(), source(), and var(). "
-            "Use --model with compiled dbt SQL for full dbt semantics."
+            "Use compiled dbt SQL for full dbt semantics."
         )
 
     return ResolvedQuery(sql=normalize_sql(sql), source_label=source_label)
@@ -115,7 +130,7 @@ def _resolve_var(
     var_name: str,
     default_raw: str,
     index: ManifestIndex,
-    variables: dict[str, str],
+    variables: dict[str, Any],
 ) -> str:
     """Resolve {{ var('name', default) }}."""
     # CLI vars take highest priority
@@ -133,7 +148,7 @@ def _resolve_var(
 def _resolve_var_required(
     var_name: str,
     index: ManifestIndex,
-    variables: dict[str, str],
+    variables: dict[str, Any],
 ) -> str:
     """Resolve {{ var('name') }} — no default, must be provided."""
     if var_name in variables:
@@ -152,6 +167,11 @@ def _fq_table(database: str | None, schema: str | None, table: str) -> str:
     """Build a fully-qualified BigQuery table reference."""
     parts = [p for p in (database, schema, table) if p]
     return ".".join(f"`{p}`" for p in parts)
+
+
+def _strip_config_blocks(sql: str) -> str:
+    """Remove dbt config() blocks so simple model SQL can be resolved directly."""
+    return CONFIG_PATTERN.sub("", sql)
 
 
 def _to_sql_literal(value: Any) -> str:
