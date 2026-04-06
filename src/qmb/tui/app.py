@@ -77,7 +77,7 @@ Export
 
 Other
   ?             Show this help
-  q             Quit
+  Ctrl-C        Quit
 """
 
 
@@ -86,7 +86,7 @@ class HelpScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=False),
-        Binding("q", "quit", "Quit", show=False),
+        Binding("ctrl+c", "app.quit", "Quit", show=False),
     ]
     DEFAULT_CSS = """
     HelpScreen { padding: 1 2; }
@@ -138,7 +138,7 @@ class QueryResultApp(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=False),
+        Binding("ctrl+c", "quit", "Quit", show=False),
         Binding("n", "next_page", "Next", show=False),
         Binding("p", "prev_page", "Prev", show=False),
         Binding("e", "vim_cell", "Edit", show=False),
