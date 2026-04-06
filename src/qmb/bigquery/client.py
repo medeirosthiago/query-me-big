@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from google.cloud import bigquery
 
 
 def get_client(project: str | None = None, location: str | None = None) -> bigquery.Client:
     """Create a BigQuery client."""
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     if project:
         kwargs["project"] = project
     if location:

@@ -9,6 +9,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from qmb.types import fmt_bytes
+
 if TYPE_CHECKING:
     from qmb.types import QueryRequest, ResolvedQuery
 
@@ -31,17 +33,6 @@ def _parse_vars(var_list: list[str] | None) -> dict[str, str]:
         key, _, value = item.partition("=")
         variables[key.strip()] = value.strip()
     return variables
-
-
-def _fmt_bytes(n: int) -> str:
-    """Format bytes as a human-readable string."""
-    if n < 1024:
-        return f"{n} B"
-    for unit in ("KB", "MB", "GB", "TB"):
-        n /= 1024
-        if n < 1024:
-            return f"{n:,.1f} {unit}"
-    return f"{n:,.1f} PB"
 
 
 @app.command()
@@ -195,7 +186,7 @@ def _execute(request: QueryRequest) -> None:
             client, resolved, dry_run=True, max_bytes_billed=request.max_bytes_billed
         )
         console.print(Panel(resolved.sql, title="Resolved SQL (dry run)", border_style="cyan"))
-        console.print(f"[cyan]Estimated:[/cyan] {_fmt_bytes(handle.bytes_processed)}")
+        console.print(f"[cyan]Estimated:[/cyan] {fmt_bytes(handle.bytes_processed)}")
         return
 
     console.print(f"[dim]Source: {resolved.source_label}[/dim]")
@@ -205,7 +196,7 @@ def _execute(request: QueryRequest) -> None:
 
     console.print(
         f"[green]✓[/green] {handle.total_rows:,} rows · "
-        f"{_fmt_bytes(handle.bytes_processed)} processed · "
+        f"{fmt_bytes(handle.bytes_processed)} processed · "
         f"Job: {handle.job_id}"
     )
 

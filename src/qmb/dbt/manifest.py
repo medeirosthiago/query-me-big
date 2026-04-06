@@ -47,19 +47,8 @@ class ManifestIndex:
     project_name: str = ""
 
 
-def discover_manifest_path(explicit_path: Path | None = None) -> Path:
-    """Find manifest.json using priority: explicit > env > cwd search."""
-    if explicit_path:
-        p = Path(explicit_path)
-        if p.is_file():
-            return p
-        if p.is_dir():
-            candidate = p / "target" / "manifest.json"
-            if candidate.exists():
-                return candidate
-            raise FileNotFoundError(f"No manifest.json found at {p}")
-        raise FileNotFoundError(f"Path does not exist: {p}")
-
+def discover_manifest_path() -> Path:
+    """Find manifest.json using priority: env > cwd search."""
     env_manifest = os.environ.get("QMB_MANIFEST_PATH") or os.environ.get(
         "MODEL_NAVIGATOR_MANIFEST_PATH"
     )
@@ -75,16 +64,17 @@ def discover_manifest_path(explicit_path: Path | None = None) -> Path:
         if candidate.exists():
             return candidate
 
-    # Search from cwd
+    # Search from cwd upward so repo-root and nested project layouts both work.
     cwd = Path.cwd()
-    candidate = cwd / "target" / "manifest.json"
-    if candidate.exists():
-        return candidate
-
-    for name in PREFERRED_PROJECT_DIR_NAMES:
-        candidate = cwd / name / "target" / "manifest.json"
+    for base in (cwd, *cwd.parents):
+        candidate = base / "target" / "manifest.json"
         if candidate.exists():
             return candidate
+
+        for name in PREFERRED_PROJECT_DIR_NAMES:
+            candidate = base / name / "target" / "manifest.json"
+            if candidate.exists():
+                return candidate
 
     raise FileNotFoundError(
         "Could not discover manifest.json. Use --manifest or set QMB_MANIFEST_PATH."

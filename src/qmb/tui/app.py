@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import subprocess
 import tempfile
 from datetime import datetime
@@ -29,18 +30,7 @@ from textual.widgets import (
 
 from qmb.bigquery.exporters import export_results
 from qmb.bigquery.pager import fetch_page, get_raw_value
-from qmb.types import ExportFormat, PageResult, QueryResultHandle
-
-
-def _fmt_bytes(n: int) -> str:
-    if n < 1024:
-        return f"{n} B"
-    for unit in ("KB", "MB", "GB", "TB"):
-        n /= 1024
-        if n < 1024:
-            return f"{n:,.1f} {unit}"
-    return f"{n:,.1f} PB"
-
+from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
 # Export format options
@@ -644,7 +634,7 @@ class QueryResultApp(App):
             f"  Location:      {h.location}",
             f"  Destination:   {h.destination_table}",
             f"  Total rows:    {h.total_rows:,}",
-            f"  Processed:     {_fmt_bytes(h.bytes_processed)}",
+            f"  Processed:     {fmt_bytes(h.bytes_processed)}",
             f"  Duration:      {duration}",
         ])
         self._open_in_nvim(details, suffix=".txt", prefix="qmb_job_")
@@ -696,8 +686,6 @@ class QueryResultApp(App):
         )
 
     def action_next_page(self) -> None:
-        import math
-
         total_pages = max(1, math.ceil(self.handle.total_rows / self.page_size))
         if self.current_page < total_pages - 1:
             self._load_page(self.current_page + 1)
@@ -710,7 +698,5 @@ class QueryResultApp(App):
         self._load_page(0)
 
     def action_last_page(self) -> None:
-        import math
-
         total_pages = max(1, math.ceil(self.handle.total_rows / self.page_size))
         self._load_page(total_pages - 1)

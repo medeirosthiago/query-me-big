@@ -8,6 +8,17 @@ from pathlib import Path
 from typing import Any
 
 
+def fmt_bytes(n: int) -> str:
+    """Format bytes as a human-readable string."""
+    if n < 1024:
+        return f"{n} B"
+    for unit in ("KB", "MB", "GB", "TB"):
+        n /= 1024
+        if n < 1024:
+            return f"{n:,.1f} {unit}"
+    return f"{n:,.1f} PB"
+
+
 class InputMode(enum.Enum):
     SQL = "sql"
     FILE = "file"

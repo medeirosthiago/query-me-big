@@ -7,7 +7,7 @@ from typing import Any
 
 from qmb.dbt.manifest import ManifestIndex
 from qmb.dbt.selector import resolve_model
-from qmb.sql.loader import _normalize
+from qmb.sql.loader import normalize_sql
 from qmb.types import ResolvedQuery
 
 # Patterns for ref(), source(), var()
@@ -48,7 +48,7 @@ def resolve_model_query(
         )
 
     return ResolvedQuery(
-        sql=_normalize(sql),
+        sql=normalize_sql(sql),
         source_label=f"model: {node.name} ({node.unique_id})",
     )
 
@@ -91,7 +91,7 @@ def resolve_file_sql(
             "Use --model with compiled dbt SQL for full dbt semantics."
         )
 
-    return ResolvedQuery(sql=_normalize(sql), source_label=source_label)
+    return ResolvedQuery(sql=normalize_sql(sql), source_label=source_label)
 
 
 def _resolve_ref(model_name: str, index: ManifestIndex) -> str:
@@ -164,12 +164,24 @@ def _to_sql_literal(value: Any) -> str:
         return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
         return str(value)
-    return f"'{value}'"
+    return _quote_sql_string(str(value))
+
+
+def _quote_sql_string(value: str) -> str:
+    """Quote a string as a BigQuery SQL literal."""
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _parse_default(raw: str) -> str:
     """Parse a default value from a Jinja var() call."""
-    stripped = raw.strip().strip("'\"")
+    raw = raw.strip()
+    is_quoted = (raw.startswith("'") and raw.endswith("'")) or (
+        raw.startswith('"') and raw.endswith('"')
+    )
+    stripped = raw.strip("'\"")
+
+    if is_quoted:
+        return _quote_sql_string(stripped)
 
     # Boolean-ish
     if stripped.lower() == "true":
@@ -191,11 +203,5 @@ def _parse_default(raw: str) -> str:
     except ValueError:
         pass
 
-    # If originally quoted, it's a string literal
-    if (raw.strip().startswith("'") and raw.strip().endswith("'")) or (
-        raw.strip().startswith('"') and raw.strip().endswith('"')
-    ):
-        return f"'{stripped}'"
-
     # Fall back to string
-    return f"'{stripped}'"
+    return _quote_sql_string(stripped)
