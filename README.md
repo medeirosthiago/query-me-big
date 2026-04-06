@@ -4,11 +4,63 @@ A BigQuery CLI with a vim-style TUI, dbt model support, and export.
 
 ## Installation
 
+Install directly from GitHub:
+
+```bash
+uv tool install git+https://github.com/medeirosthiago/query-me-big.git
+```
+
+```bash
+pipx install "git+https://github.com/medeirosthiago/query-me-big.git"
+```
+
+If you prefer plain pip:
+
+```bash
+pip install "git+https://github.com/medeirosthiago/query-me-big.git"
+```
+
+For local development:
+
 ```bash
 uv sync
 ```
 
 Requires Python 3.11+ and Google Cloud credentials configured (`gcloud auth application-default login`).
+
+## Quick Examples
+
+### Ad-hoc query
+
+```bash
+# count rows in a table
+qmb --sql "SELECT COUNT(*) FROM \`my-project.analytics.events\`"
+
+# sample rows and browse in the TUI
+qmb --sql "SELECT * FROM \`my-project.analytics.orders\` WHERE status = 'shipped' LIMIT 500"
+
+# dry-run to check cost before executing
+qmb --sql "SELECT * FROM \`my-project.warehouse.big_table\`" --dry-run
+
+# export straight to CSV without opening the TUI
+qmb --sql "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv --no-tui
+```
+
+### dbt model
+
+```bash
+# query a dbt model (auto-discovers target/manifest.json)
+qmb --model orders
+
+# explicit manifest path
+qmb --model orders --manifest /path/to/dbt/target/manifest.json
+
+# override dbt variables
+qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
+
+# export a dbt model to parquet
+qmb --model customers --export parquet --out customers.parquet --no-tui
+```
 
 ## Usage
 
