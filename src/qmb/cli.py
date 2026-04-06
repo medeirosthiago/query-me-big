@@ -150,11 +150,11 @@ def run(
     else:
         mode = InputMode.MODEL
 
-    # Auto-enable dbt resolution when the .sql file lives inside a dbt project
+    # Auto-enable dbt resolution when file is inside a dbt project or env vars are set
     if mode == InputMode.FILE and not resolve_dbt:
-        from qmb.dbt.manifest import is_dbt_project_file
+        from qmb.dbt.manifest import has_dbt_env, is_dbt_project_file
 
-        if is_dbt_project_file(file):  # type: ignore[arg-type]
+        if is_dbt_project_file(file) or has_dbt_env():  # type: ignore[arg-type]
             resolve_dbt = True
             console.print("[dim]Auto-detected dbt project, enabling --resolve-dbt[/dim]")
 
