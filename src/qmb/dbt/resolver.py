@@ -3,7 +3,7 @@
 import re
 from typing import Any
 
-from qmb.dbt.manifest import ManifestIndex
+from qmb.dbt.manifest import ManifestIndex, ManifestNode
 from qmb.dbt.selector import resolve_model
 from qmb.sql.loader import normalize_sql
 from qmb.types import ResolvedQuery
@@ -31,6 +31,24 @@ UNSUPPORTED_JINJA = re.compile(r"\{[%{].*?[%}]\}")
 CONFIG_PATTERN = re.compile(r"\{\{\-?\s*config\(.*?\)\s*\-?\}\}", re.IGNORECASE | re.DOTALL)
 
 
+def resolve_file_to_model(
+    file_path: str,
+    index: ManifestIndex,
+) -> ManifestNode | None:
+    """Match a .sql file path to a manifest node via original_file_path."""
+    from pathlib import PurePosixPath
+
+    file_parts = PurePosixPath(file_path).parts
+    for node in index.nodes_by_id.values():
+        if not node.original_file_path:
+            continue
+        # Strip ".." from relative original_file_path
+        orig_parts = tuple(p for p in PurePosixPath(node.original_file_path).parts if p != "..")
+        if len(orig_parts) <= len(file_parts) and file_parts[-len(orig_parts) :] == orig_parts:
+            return node
+    return None
+
+
 def resolve_model_query(
     model_selector: str,
     index: ManifestIndex,
@@ -47,7 +65,7 @@ def resolve_model_query(
                 f"Model '{model_selector}' ({node.unique_id}) has no raw_code for var resolution."
             )
         return resolve_file_sql(
-            _strip_config_blocks(node.raw_code),
+            strip_config_blocks(node.raw_code),
             index,
             variables,
             source_label=source_label,
@@ -169,7 +187,7 @@ def _fq_table(database: str | None, schema: str | None, table: str) -> str:
     return ".".join(f"`{p}`" for p in parts)
 
 
-def _strip_config_blocks(sql: str) -> str:
+def strip_config_blocks(sql: str) -> str:
     """Remove dbt config() blocks so simple model SQL can be resolved directly."""
     return CONFIG_PATTERN.sub("", sql)
 

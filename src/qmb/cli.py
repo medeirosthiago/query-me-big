@@ -290,10 +290,41 @@ def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
 
         if request.resolve_dbt:
             from qmb.dbt.manifest import discover_manifest_path, load_manifest
-            from qmb.dbt.resolver import resolve_file_sql
+            from qmb.dbt.resolver import resolve_file_sql, resolve_file_to_model
+            from qmb.sql.loader import normalize_sql
+            from qmb.types import ResolvedQuery
 
             manifest_path = request.manifest_path or discover_manifest_path()
             index = load_manifest(manifest_path)
+
+            # Try to match file to a compiled manifest node first
+            if request.file_path:
+                node = resolve_file_to_model(str(request.file_path), index)
+                if node:
+                    sql = node.compiled_code
+                    if sql:
+                        console.print(
+                            f"[dim]Matched manifest node: {node.unique_id}[/dim]"
+                        )
+                        return ResolvedQuery(
+                            sql=normalize_sql(sql),
+                            source_label=f"model: {node.name} ({node.unique_id})",
+                        )
+                    # No compiled_code — use raw_code with config stripped
+                    if node.raw_code:
+                        from qmb.dbt.resolver import strip_config_blocks
+
+                        console.print(
+                            f"[dim]Matched {node.unique_id} (no compiled_code, "
+                            "resolving from raw SQL)[/dim]"
+                        )
+                        return resolve_file_sql(
+                            strip_config_blocks(node.raw_code),
+                            index,
+                            request.variables,
+                            source_label=f"model: {node.name} ({node.unique_id})",
+                        )
+
             return resolve_file_sql(
                 resolved.sql,
                 index,
