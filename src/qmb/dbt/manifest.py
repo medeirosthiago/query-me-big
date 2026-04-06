@@ -42,6 +42,12 @@ class ManifestIndex:
     project_name: str = ""
 
 
+def is_dbt_project_file(file_path: Path) -> bool:
+    """Check if a .sql file lives inside a dbt project directory."""
+    resolved = file_path.resolve()
+    return any((parent / "dbt_project.yml").exists() for parent in resolved.parents)
+
+
 def discover_manifest_path() -> Path:
     """Find manifest.json using priority: env > cwd search."""
     env_manifest = os.environ.get("DBT_MODEL_PATH")

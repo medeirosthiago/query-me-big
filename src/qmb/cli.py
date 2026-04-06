@@ -119,6 +119,7 @@ def run(
         str | None,
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
     ] = None,
+
 ) -> None:
     """Run a BigQuery query with optional dbt model resolution."""
     from qmb.types import ExportFormat, InputMode, QueryRequest
@@ -148,6 +149,14 @@ def run(
                 raise typer.BadParameter(f"File not found: {file}")
     else:
         mode = InputMode.MODEL
+
+    # Auto-enable dbt resolution when the .sql file lives inside a dbt project
+    if mode == InputMode.FILE and not resolve_dbt:
+        from qmb.dbt.manifest import is_dbt_project_file
+
+        if is_dbt_project_file(file):  # type: ignore[arg-type]
+            resolve_dbt = True
+            console.print("[dim]Auto-detected dbt project, enabling --resolve-dbt[/dim]")
 
     needs_manifest = mode == InputMode.MODEL or (mode == InputMode.FILE and resolve_dbt)
     if needs_manifest and not manifest:
