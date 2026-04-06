@@ -44,11 +44,14 @@ class ManifestIndex:
 
 def discover_manifest_path() -> Path:
     """Find manifest.json using priority: env > cwd search."""
-    env_manifest = os.environ.get("QMB_MANIFEST_PATH")
+    env_manifest = os.environ.get("DBT_MODEL_PATH")
     if env_manifest:
         p = Path(env_manifest)
-        if p.exists():
+        if p.is_file():
             return p
+        candidate = p / "target" / "manifest.json"
+        if candidate.exists():
+            return candidate
         raise FileNotFoundError(f"Manifest from env var not found: {p}")
 
     env_project = os.environ.get("DBT_PROJECT_DIR")
@@ -70,7 +73,7 @@ def discover_manifest_path() -> Path:
                 return candidate
 
     raise FileNotFoundError(
-        "Could not discover manifest.json. Use --manifest or set QMB_MANIFEST_PATH."
+        "Could not discover manifest.json. Use --manifest or set DBT_MODEL_PATH."
     )
 
 
