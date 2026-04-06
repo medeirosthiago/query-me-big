@@ -18,11 +18,13 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.events import Key
+from textual.screen import Screen
 from textual.widgets import (
     DataTable,
     Input,
     Label,
     OptionList,
+    Static,
 )
 
 from qmb.bigquery.exporters import export_results
@@ -49,6 +51,61 @@ _EXPORT_OPTIONS: list[tuple[ExportFormat, str, str]] = [
     (ExportFormat.JSON, "JSON (.json)", ".json"),
     (ExportFormat.PARQUET, "Parquet (.parquet)", ".parquet"),
 ]
+
+
+HELP_TEXT = """\
+qmb — Keyboard Shortcuts
+========================================
+
+Navigation
+  h/j/k/l       Move left/down/up/right
+  Arrow keys    Move left/down/up/right
+  n             Next page (or next match)
+  N             Previous match
+  p             Previous page
+  Home          First page
+  End           Last page
+
+Search
+  /             Search cell values
+  f             Search column name
+  n/N           Next/previous match
+  Escape        Clear search
+
+Yank (copy)
+  yw            Copy selected cell value
+  yc            Copy selected row as CSV
+  yj            Copy selected row as JSON
+
+Inspect
+  e             Open cell in nvim (read-only)
+  s             Open full SQL query in nvim
+  d             Open job details in nvim
+
+Export
+  x             Open export picker
+  xc            Quick export to CSV
+  xj            Quick export to JSON
+
+Other
+  ?             Show this help
+  q             Quit
+"""
+
+
+class HelpScreen(Screen):
+    """Simple scrollable help screen."""
+
+    BINDINGS = [
+        Binding("q,escape", "app.pop_screen", "Back", show=False),
+    ]
+    DEFAULT_CSS = """
+    HelpScreen { padding: 1 2; }
+    HelpScreen Static { width: 1fr; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(HELP_TEXT)
 
 
 # ---------------------------------------------------------------------------
@@ -594,45 +651,7 @@ class QueryResultApp(App):
     # -- help ---------------------------------------------------------------
 
     def action_show_help(self) -> None:
-        help_text = "\n".join([
-            "qmb — Keyboard Shortcuts",
-            "=" * 40,
-            "",
-            "Navigation",
-            "  h/j/k/l       Move left/down/up/right",
-            "  Arrow keys    Move left/down/up/right",
-            "  n             Next page (or next match)",
-            "  N             Previous match",
-            "  p             Previous page",
-            "  Home          First page",
-            "  End           Last page",
-            "",
-            "Search",
-            "  /             Search cell values",
-            "  f             Search column name",
-            "  n/N           Next/previous match",
-            "  Escape        Clear search",
-            "",
-            "Yank (copy)",
-            "  yw            Copy selected cell value",
-            "  yc            Copy selected row as CSV",
-            "  yj            Copy selected row as JSON",
-            "",
-            "Inspect",
-            "  e             Open cell in nvim (read-only)",
-            "  s             Open full SQL query in nvim",
-            "  d             Open job details in nvim",
-            "",
-            "Export",
-            "  x             Open export picker",
-            "  xc            Quick export to CSV",
-            "  xj            Quick export to JSON",
-            "",
-            "Other",
-            "  ?             Show this help",
-            "  q             Quit",
-        ])
-        self._open_in_nvim(help_text, suffix=".txt", prefix="qmb_help_")
+        self.push_screen(HelpScreen())
 
     # -- pagination ---------------------------------------------------------
 
