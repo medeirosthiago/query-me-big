@@ -48,6 +48,10 @@ qmb — Keyboard Shortcuts
 Navigation
   h/j/k/l       Move left/down/up/right
   Arrow keys    Move left/down/up/right
+  gg            Go to first row
+  G             Go to last row
+  0             Go to first column
+  $             Go to last column
   n             Next page (or next match)
   N             Previous match
   p             Previous page
@@ -274,6 +278,15 @@ class QueryResultApp(App):
                 self._open_export_picker()
             return
 
+        if self._pending_key == "g":
+            self._clear_pending()
+            event.prevent_default()
+            event.stop()
+            if event.key == "g":
+                table = self.query_one("#result-table", DataTable)
+                table.move_cursor(row=0)
+            return
+
         # First key — start sequence, search, or navigate
         if event.key == "y":
             self._pending_key = "y"
@@ -284,6 +297,13 @@ class QueryResultApp(App):
 
         if event.key == "x":
             self._pending_key = "x"
+            self.set_timer(0.4, self._on_pending_timeout)
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "g":
+            self._pending_key = "g"
             self.set_timer(0.4, self._on_pending_timeout)
             event.prevent_default()
             event.stop()
@@ -330,6 +350,15 @@ class QueryResultApp(App):
             event.prevent_default()
         elif event.key == "l":
             table.action_cursor_right()
+            event.prevent_default()
+        elif event.key == "G":
+            table.move_cursor(row=table.row_count - 1)
+            event.prevent_default()
+        elif event.key == "dollar_sign":
+            table.move_cursor(column=len(table.columns) - 1)
+            event.prevent_default()
+        elif event.key == "0":
+            table.move_cursor(column=1)  # skip # column
             event.prevent_default()
 
     def _on_pending_timeout(self) -> None:
