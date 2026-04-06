@@ -115,6 +115,10 @@ def run(
         int | None,
         typer.Option("--max-bytes-billed", help="Maximum bytes billed safety limit"),
     ] = None,
+    where: Annotated[
+        str | None,
+        typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
+    ] = None,
 ) -> None:
     """Run a BigQuery query with optional dbt model resolution."""
     from qmb.types import ExportFormat, InputMode, QueryRequest
@@ -187,6 +191,7 @@ def run(
         no_tui=no_tui,
         dry_run=dry_run,
         max_bytes_billed=max_bytes_billed,
+        where=where,
     )
 
     _execute(request)
@@ -200,6 +205,15 @@ def _execute(request: QueryRequest) -> None:
 
     # Step 1: Resolve SQL
     resolved = _resolve_sql(request)
+
+    # Step 1.5: Apply --where clause
+    if request.where:
+        from qmb.types import ResolvedQuery
+
+        resolved = ResolvedQuery(
+            sql=f"SELECT * FROM ({resolved.sql}) __qmb WHERE {request.where}",
+            source_label=resolved.source_label,
+        )
 
     # Step 2: Execute
     client = get_client(request.project, request.location)

@@ -46,6 +46,7 @@ class QueryRequest:
     no_tui: bool = False
     dry_run: bool = False
     max_bytes_billed: int | None = None
+    where: str | None = None
 
 
 @dataclass

@@ -60,6 +60,9 @@ qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
 
 # export a dbt model to parquet
 qmb --model customers --export parquet --out customers.parquet --no-tui
+
+# filter a big model with --where (wraps in a subquery at runtime, models untouched)
+qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
 ```
 
 ## Usage
@@ -142,6 +145,7 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | `--out` | `-o` | Export output path |
 | `--no-tui` | | Skip TUI, just export or print summary |
 | `--dry-run` | | Validate query without executing |
+| `--where` | `-w` | WHERE clause appended to the resolved SQL |
 | `--max-bytes-billed` | | Maximum bytes billed safety limit |
 
 ## TUI Keyboard Shortcuts
