@@ -34,16 +34,16 @@ Requires Python 3.11+ and Google Cloud credentials configured (`gcloud auth appl
 
 ```bash
 # count rows in a table
-qmb --sql "SELECT COUNT(*) FROM \`my-project.analytics.events\`"
+qmb "SELECT COUNT(*) FROM \`my-project.analytics.events\`"
 
 # sample rows and browse in the TUI
-qmb --sql "SELECT * FROM \`my-project.analytics.orders\` WHERE status = 'shipped' LIMIT 500"
+qmb "SELECT * FROM \`my-project.analytics.orders\` WHERE status = 'shipped' LIMIT 500"
 
 # dry-run to check cost before executing
-qmb --sql "SELECT * FROM \`my-project.warehouse.big_table\`" --dry-run
+qmb "SELECT * FROM \`my-project.warehouse.big_table\`" --dry-run
 
 # export straight to CSV without opening the TUI
-qmb --sql "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv --no-tui
+qmb "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv --no-tui
 ```
 
 ### dbt model
@@ -72,7 +72,7 @@ qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
 Run an inline query and browse results in the TUI:
 
 ```bash
-qmb --sql "SELECT * FROM \`project.dataset.table\` LIMIT 1000"
+qmb "SELECT * FROM \`project.dataset.table\` LIMIT 1000"
 ```
 
 ### Query from a `.sql` file
@@ -113,7 +113,7 @@ When using `--model` with `--var`, qmb resolves the model SQL directly. If the m
 Validate a query and see estimated bytes without executing:
 
 ```bash
-qmb --sql "SELECT * FROM \`project.dataset.table\`" --dry-run
+qmb "SELECT * FROM \`project.dataset.table\`" --dry-run
 ```
 
 ### Export from CLI
@@ -121,7 +121,7 @@ qmb --sql "SELECT * FROM \`project.dataset.table\`" --dry-run
 Export directly without opening the TUI:
 
 ```bash
-qmb --sql "SELECT 1" --export csv --out results.csv --no-tui
+qmb "SELECT 1" --export csv --out results.csv --no-tui
 qmb --model orders --export json --out orders.json --no-tui
 qmb --file query.sql --export parquet --out data.parquet --no-tui
 ```
@@ -132,7 +132,7 @@ If `--out` is omitted, defaults to `output.<ext>`.
 
 | Option | Short | Description |
 |---|---|---|
-| `--sql` | `-s` | Inline SQL query |
+| `query` | | Positional SQL query argument |
 | `--file` | `-f` | Path to a `.sql` file |
 | `--model` | `-m` | dbt model name |
 | `--manifest` | | Path to `manifest.json` |
@@ -198,4 +198,4 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | Key | Action |
 |---|---|
 | `?` | Show all shortcuts |
-| `q` | Quit |
+| `Ctrl-C` | Quit |
