@@ -198,4 +198,4 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | Key | Action |
 |---|---|
 | `?` | Show all shortcuts |
-| `Ctrl-C` | Quit |
+| `Ctrl-Q` | Quit |
