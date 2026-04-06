@@ -97,7 +97,8 @@ class HelpScreen(Screen):
     """Simple scrollable help screen."""
 
     BINDINGS = [
-        Binding("q,escape", "app.pop_screen", "Back", show=False),
+        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("q", "quit", "Quit", show=False),
     ]
     DEFAULT_CSS = """
     HelpScreen { padding: 1 2; }
