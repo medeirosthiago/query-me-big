@@ -1,7 +1,5 @@
 """Resolve dbt Jinja patterns (ref, source, var) in raw SQL."""
 
-from __future__ import annotations
-
 import re
 from typing import Any
 

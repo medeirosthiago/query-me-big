@@ -1,7 +1,5 @@
 """Load SQL from string or file."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from qmb.types import InputMode, QueryRequest, ResolvedQuery

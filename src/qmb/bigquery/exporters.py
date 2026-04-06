@@ -1,7 +1,5 @@
 """Export query results to CSV, JSON, or Parquet."""
 
-from __future__ import annotations
-
 import csv
 import json
 from datetime import date, datetime, time

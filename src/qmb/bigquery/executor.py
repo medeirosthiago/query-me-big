@@ -1,7 +1,5 @@
 """Execute queries against BigQuery."""
 
-from __future__ import annotations
-
 from google.cloud import bigquery
 
 from qmb.types import QueryResultHandle, ResolvedQuery

@@ -1,7 +1,5 @@
 """Textual TUI application for browsing BigQuery results."""
 
-from __future__ import annotations
-
 import csv
 import io
 import json

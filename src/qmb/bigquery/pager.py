@@ -1,7 +1,5 @@
 """Paginate through BigQuery query results."""
 
-from __future__ import annotations
-
 import json
 import math
 from datetime import date, datetime, time

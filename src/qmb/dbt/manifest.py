@@ -1,7 +1,5 @@
 """Load and index a dbt manifest.json."""
 
-from __future__ import annotations
-
 import json
 import os
 from dataclasses import dataclass, field
@@ -49,9 +47,7 @@ class ManifestIndex:
 
 def discover_manifest_path() -> Path:
     """Find manifest.json using priority: env > cwd search."""
-    env_manifest = os.environ.get("QMB_MANIFEST_PATH") or os.environ.get(
-        "MODEL_NAVIGATOR_MANIFEST_PATH"
-    )
+    env_manifest = os.environ.get("QMB_MANIFEST_PATH")
     if env_manifest:
         p = Path(env_manifest)
         if p.exists():

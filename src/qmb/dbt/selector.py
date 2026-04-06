@@ -1,7 +1,5 @@
 """Resolve a user-provided model selector to a manifest node."""
 
-from __future__ import annotations
-
 from qmb.dbt.manifest import ManifestIndex, ManifestNode
 
 
