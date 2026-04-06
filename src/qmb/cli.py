@@ -59,9 +59,9 @@ def _parse_vars(var_list: list[str] | None) -> dict[str, Any]:
 
 @app.command()
 def run(
-    sql: Annotated[
+    query: Annotated[
         str | None,
-        typer.Option("--sql", "-s", help="Inline SQL query to execute"),
+        typer.Argument(help="Inline SQL query to execute"),
     ] = None,
     file: Annotated[
         Path | None,
@@ -124,23 +124,23 @@ def run(
     from qmb.types import ExportFormat, InputMode, QueryRequest
 
     # Validate mutually exclusive inputs
-    inputs = sum(x is not None for x in [sql, file, model])
+    inputs = sum(x is not None for x in [query, file, model])
     if inputs == 0:
-        raise typer.BadParameter("Provide one of --sql, --file, or --model.")
+        raise typer.BadParameter("Provide one of query, --file, or --model.")
     if inputs > 1:
-        raise typer.BadParameter("Provide only one of --sql, --file, or --model.")
+        raise typer.BadParameter("Provide only one of query, --file, or --model.")
 
     # Determine mode
-    if sql is not None:
+    if query is not None:
         mode = InputMode.SQL
     elif file is not None:
         if str(file) == "-":
             import sys
 
             mode = InputMode.SQL
-            sql = sys.stdin.read()
+            query = sys.stdin.read()
             file = None
-            if not sql.strip():
+            if not query.strip():
                 raise typer.BadParameter("No SQL provided on stdin.")
         else:
             mode = InputMode.FILE
@@ -177,7 +177,7 @@ def run(
 
     request = QueryRequest(
         mode=mode,
-        sql=sql,
+        sql=query,
         file_path=file,
         model_name=model,
         manifest_path=manifest,
