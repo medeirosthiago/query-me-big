@@ -117,9 +117,18 @@ def run(
     if sql is not None:
         mode = InputMode.SQL
     elif file is not None:
-        mode = InputMode.FILE
-        if not file.exists():
-            raise typer.BadParameter(f"File not found: {file}")
+        if str(file) == "-":
+            import sys
+
+            mode = InputMode.SQL
+            sql = sys.stdin.read()
+            file = None
+            if not sql.strip():
+                raise typer.BadParameter("No SQL provided on stdin.")
+        else:
+            mode = InputMode.FILE
+            if not file.exists():
+                raise typer.BadParameter(f"File not found: {file}")
     else:
         mode = InputMode.MODEL
         if not manifest:
