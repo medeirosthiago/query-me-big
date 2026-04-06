@@ -27,7 +27,7 @@ from textual.widgets import (
 )
 
 from qmb.bigquery.exporters import export_results
-from qmb.bigquery.pager import fetch_page, get_raw_value
+from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
@@ -462,10 +462,9 @@ class QueryResultApp(App):
             return
 
         raw_row = self._raw_rows[row_idx]
-        row_data = {k: get_raw_value(v) for k, v in raw_row.items()}
 
         try:
-            pyperclip.copy(json.dumps(row_data, indent=2))
+            pyperclip.copy(json.dumps(raw_row, indent=2, default=json_default))
             self.notify("Copied row as JSON", severity="information")
         except pyperclip.PyperclipException:
             self.notify("Clipboard not available", severity="error")

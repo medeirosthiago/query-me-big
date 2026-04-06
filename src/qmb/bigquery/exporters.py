@@ -2,14 +2,14 @@
 
 import csv
 import json
-from datetime import date, datetime, time
-from decimal import Decimal
+from collections.abc import Iterable, Iterator
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
 from google.cloud import bigquery
 
-from qmb.bigquery.pager import fetch_all_rows, get_raw_value
+from qmb.bigquery.pager import get_raw_value, iter_all_rows, json_default
 from qmb.types import ExportFormat, QueryResultHandle
 
 
@@ -20,61 +20,85 @@ def export_results(
     output_path: Path,
 ) -> int:
     """Export all query results to the specified format. Returns row count."""
-    rows = fetch_all_rows(client, handle)
+    rows = iter_all_rows(client, handle)
 
     if fmt == ExportFormat.CSV:
-        _export_csv(rows, handle.schema, output_path)
-    elif fmt == ExportFormat.JSON:
-        _export_json(rows, output_path)
-    elif fmt == ExportFormat.PARQUET:
-        _export_parquet(rows, handle.schema, output_path)
+        return _export_csv(rows, handle.schema, output_path)
+    if fmt == ExportFormat.JSON:
+        return _export_json(rows, handle.schema, output_path)
+    if fmt == ExportFormat.PARQUET:
+        return _export_parquet(rows, handle.schema, output_path)
+    return 0
 
-    return len(rows)
 
-
-def _export_csv(rows: list[dict[str, Any]], schema: list[dict], output_path: Path) -> None:
+def _export_csv(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
     """Export to CSV."""
-    if not rows:
-        output_path.write_text("", encoding="utf-8")
-        return
-
     fieldnames = [col["name"] for col in schema]
+    rows_iter = iter(rows)
+    first_row = next(rows_iter, None)
+    if first_row is None:
+        output_path.write_text("", encoding="utf-8")
+        return 0
+
+    count = 0
     with output_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for row in rows:
-            writer.writerow({k: _csv_value(v) for k, v in row.items()})
+        for row in chain([first_row], rows_iter):
+            writer.writerow({name: _csv_value(row.get(name)) for name in fieldnames})
+            count += 1
+    return count
 
 
-def _export_json(rows: list[dict[str, Any]], output_path: Path) -> None:
-    """Export to JSON array."""
-    output_path.write_text(
-        json.dumps(rows, indent=2, default=_json_serializer),
-        encoding="utf-8",
-    )
+def _export_json(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
+    """Export to a streamed JSON array."""
+    fieldnames = [col["name"] for col in schema]
+    rows_iter = iter(rows)
+    first_row = next(rows_iter, None)
+    if first_row is None:
+        output_path.write_text("[]", encoding="utf-8")
+        return 0
+
+    count = 0
+    with output_path.open("w", encoding="utf-8") as f:
+        f.write("[\n")
+        for i, row in enumerate(chain([first_row], rows_iter)):
+            if i:
+                f.write(",\n")
+            f.write(json.dumps(_ordered_row(row, fieldnames), indent=2, default=json_default))
+            count += 1
+        f.write("\n]")
+    return count
 
 
-def _export_parquet(rows: list[dict[str, Any]], schema: list[dict], output_path: Path) -> None:
-    """Export to Parquet via pyarrow."""
+def _export_parquet(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
+    """Export to Parquet via pyarrow without loading all rows into memory."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    if not rows:
-        # Write empty parquet with schema
+    fieldnames = [col["name"] for col in schema]
+    writer: pq.ParquetWriter | None = None
+    count = 0
+
+    for batch in _iter_row_batches(rows):
+        ordered_batch = [_ordered_row(row, fieldnames) for row in batch]
+        table = pa.Table.from_pylist(
+            ordered_batch,
+            schema=writer.schema if writer is not None else None,
+        )
+        if writer is None:
+            writer = pq.ParquetWriter(str(output_path), table.schema)
+        writer.write_table(table)
+        count += len(batch)
+
+    if writer is None:
         columns = {col["name"]: [] for col in schema}
         table = pa.table(columns)
         pq.write_table(table, str(output_path))
-        return
+        return 0
 
-    # Let pyarrow infer types from the data
-    columns: dict[str, list] = {col["name"]: [] for col in schema}
-    for row in rows:
-        for col in schema:
-            name = col["name"]
-            columns[name].append(row.get(name))
-
-    table = pa.table(columns)
-    pq.write_table(table, str(output_path))
+    writer.close()
+    return count
 
 
 def _csv_value(value: Any) -> str:
@@ -82,12 +106,18 @@ def _csv_value(value: Any) -> str:
     return get_raw_value(value)
 
 
-def _json_serializer(obj: Any) -> Any:
-    """Custom JSON serializer for types not handled by default."""
-    if isinstance(obj, (datetime, date, time)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, bytes):
-        return obj.hex()
-    return str(obj)
+def _iter_row_batches(
+    rows: Iterable[dict[str, Any]], batch_size: int = 5000
+) -> Iterator[list[dict[str, Any]]]:
+    batch: list[dict[str, Any]] = []
+    for row in rows:
+        batch.append(row)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _ordered_row(row: dict[str, Any], fieldnames: list[str]) -> dict[str, Any]:
+    return {name: row.get(name) for name in fieldnames}

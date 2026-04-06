@@ -2,6 +2,7 @@
 
 import json
 import math
+from collections.abc import Iterator
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
@@ -11,6 +12,17 @@ from google.cloud import bigquery
 from qmb.types import PageResult, QueryResultHandle
 
 MAX_DISPLAY_WIDTH = 60
+
+
+def json_default(obj: Any) -> Any:
+    """Serialize BigQuery values to JSON-compatible types."""
+    if isinstance(obj, (datetime, date, time)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, bytes):
+        return obj.hex()
+    return str(obj)
 
 
 def fetch_page(
@@ -25,12 +37,7 @@ def fetch_page(
 
     start_index = page * page_size
 
-    # Read from the destination table
-    dest_parts = handle.destination_table.split(".")
-    table_ref = bigquery.TableReference(
-        bigquery.DatasetReference(dest_parts[0], dest_parts[1]),
-        dest_parts[2],
-    )
+    table_ref = _table_ref_from_handle(handle)
 
     rows_iter = client.list_rows(
         table_ref,
@@ -55,24 +62,16 @@ def fetch_page(
     )
 
 
-def fetch_all_rows(
+def iter_all_rows(
     client: bigquery.Client,
     handle: QueryResultHandle,
     chunk_size: int = 5000,
-) -> list[dict[str, Any]]:
-    """Fetch all rows from the result table (for export)."""
-    dest_parts = handle.destination_table.split(".")
-    table_ref = bigquery.TableReference(
-        bigquery.DatasetReference(dest_parts[0], dest_parts[1]),
-        dest_parts[2],
-    )
-
-    all_rows: list[dict[str, Any]] = []
+) -> Iterator[dict[str, Any]]:
+    """Iterate all rows from the result table without materializing them in memory."""
+    table_ref = _table_ref_from_handle(handle)
     rows_iter = client.list_rows(table_ref, page_size=chunk_size)
     for row in rows_iter:
-        all_rows.append(dict(row.items()))
-
-    return all_rows
+        yield dict(row.items())
 
 
 def get_raw_value(value: Any) -> str:
@@ -80,7 +79,7 @@ def get_raw_value(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, indent=2, default=str)
+        return json.dumps(value, indent=2, default=json_default)
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -114,3 +113,11 @@ def _truncate(s: str, max_len: int = MAX_DISPLAY_WIDTH) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1] + "…"
+
+
+def _table_ref_from_handle(handle: QueryResultHandle) -> bigquery.TableReference:
+    dest_parts = handle.destination_table.split(".")
+    return bigquery.TableReference(
+        bigquery.DatasetReference(dest_parts[0], dest_parts[1]),
+        dest_parts[2],
+    )
