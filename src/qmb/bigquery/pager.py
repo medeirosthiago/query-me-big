@@ -69,9 +69,14 @@ def iter_all_rows(
 ) -> Iterator[dict[str, Any]]:
     """Iterate all rows from the result table without materializing them in memory."""
     table_ref = _table_ref_from_handle(handle)
-    rows_iter = client.list_rows(table_ref, page_size=chunk_size)
-    for row in rows_iter:
-        yield dict(row.items())
+    for start_index in range(0, handle.total_rows, chunk_size):
+        rows_iter = client.list_rows(
+            table_ref,
+            start_index=start_index,
+            max_results=chunk_size,
+        )
+        for row in rows_iter:
+            yield dict(row.items())
 
 
 def get_raw_value(value: Any) -> str:

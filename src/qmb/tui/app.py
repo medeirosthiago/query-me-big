@@ -603,12 +603,13 @@ class QueryResultApp(App):
             return
         # Phase 2: path submitted — do the export
         inp = self.query_one("#export-filter", Input)
+        export_format = self._export_format
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        ext = next(e for f, _, e in _EXPORT_OPTIONS if f == self._export_format)
+        ext = next(e for f, _, e in _EXPORT_OPTIONS if f == export_format)
         path = Path(inp.value or f"{ts}{ext}")
         self._dismiss_picker()
         try:
-            count = export_results(self.bq_client, self.handle, self._export_format, path)
+            count = export_results(self.bq_client, self.handle, export_format, path)
             self.notify(f"Exported {count:,} rows to {path}", severity="information")
         except Exception as exc:
             self.notify(f"Export failed: {exc}", severity="error")
