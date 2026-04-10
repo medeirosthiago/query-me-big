@@ -3,6 +3,9 @@
 ## Search
 - [ ] Highlight matching cells in the DataTable after search
 
+## Browser
+- [ ] Show dataset/table permission lists in browser details (principal, role, inherited/direct)
+
 ## Visual Mode
 - [ ] `v` enters visual mode for selecting ranges of cells/rows
 - [ ] Copy selection to clipboard (CSV/JSON)

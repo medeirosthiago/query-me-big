@@ -65,6 +65,16 @@ qmb --model customers --export parquet --out customers.parquet --no-tui
 qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
 ```
 
+### Browser only
+
+```bash
+# open the dataset/table browser without running a query
+qmb --browser-only --project my-project
+
+# short alias
+qmb --browse --project my-project --location US
+```
+
 ## Usage
 
 ### Ad-hoc SQL
@@ -130,6 +140,17 @@ qmb --file query.sql --export parquet --out data.parquet --no-tui
 
 If `--out` is omitted, defaults to `output.<ext>`.
 
+### Browser only
+
+Open qmb directly into the dataset/table explorer without executing a query:
+
+```bash
+qmb --browser-only --project my-project
+qmb --browse --project my-project --location US
+```
+
+In browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
+
 ## CLI Options
 
 | Option | Short | Description |
@@ -143,6 +164,7 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | `--project` | | GCP project ID |
 | `--location` | | BigQuery location (`US`, `EU`, etc.) |
 | `--page-size` | | Rows per page in TUI (default: 200) |
+| `--browser-only`, `--browse` | | Open the dataset/table browser without running a query |
 | `--export` | `-e` | Export format: `csv`, `json`, or `parquet` |
 | `--out` | `-o` | Export output path |
 | `--no-tui` | | Skip TUI, just export or print summary |
@@ -174,6 +196,18 @@ If `--out` is omitted, defaults to `output.<ext>`.
 | `f` | Search column name (filterable dropdown) |
 | `n` / `N` | Next / previous match |
 | `Escape` | Clear search |
+
+### Browser
+
+| Key | Action |
+|---|---|
+| `b` | Toggle dataset browser |
+| `/` | Search datasets and tables |
+| `Enter` / `d` | Open selected dataset or table details in nvim |
+| `h` / `l` or Arrow Left / Right | Collapse / expand selected dataset |
+| `j` / `k` or Arrow Down / Up | Move through browser items |
+| `gg` / `G` | Go to first / last browser item |
+| `Escape` | Exit browser search or close the browser |
 
 ### Yank (copy)
 
