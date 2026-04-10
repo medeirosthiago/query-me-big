@@ -15,7 +15,8 @@ from google.cloud import bigquery
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.events import Key
 from textual.screen import Screen
 from textual.widgets import (
@@ -24,8 +25,16 @@ from textual.widgets import (
     Label,
     OptionList,
     Static,
+    Tree,
 )
 
+from qmb.bigquery.browser import (
+    BrowserMatch,
+    build_table_index,
+    filter_browser_matches,
+    list_dataset_ids,
+    list_dataset_tables,
+)
 from qmb.bigquery.exporters import export_results
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
@@ -63,6 +72,14 @@ Search
   f             Search column name
   n/N           Next/previous match
   Escape        Clear search
+
+Browser
+  b             Toggle dataset browser
+  /             Search datasets and tables
+  Enter         Expand selected dataset
+  h/l           Collapse/expand selected dataset
+  gg / G        First/last browser item
+  Escape        Close browser (or exit browser search)
 
 Yank (copy)
   yw            Copy selected cell value
@@ -113,6 +130,30 @@ class QueryResultApp(App):
     ESCAPE_TO_MINIMIZE = False
 
     CSS = """
+    #app-layout {
+        height: 1fr;
+    }
+    #browser-panel {
+        display: none;
+        width: 25%;
+        min-width: 32;
+        border: tall $accent;
+        padding: 0 1;
+    }
+    #browser-search {
+        display: none;
+        height: 3;
+        margin: 0 0 1 0;
+    }
+    #browser-tree {
+        height: 1fr;
+    }
+    #browser-status {
+        height: 1;
+    }
+    #main-pane {
+        width: 1fr;
+    }
     #result-table {
         height: 1fr;
     }
@@ -177,21 +218,44 @@ class QueryResultApp(App):
         self._filtered_columns: list[int] = []
         self._filtered_exports: list[int] = []
         self._export_format: ExportFormat | None = None
+        self._browser_dataset_ids: list[str] = []
+        self._browser_tables_by_dataset: dict[str, tuple[str, ...]] = {}
+        self._browser_query = ""
+        self._browser_selected_dataset: str | None = None
+        self._browser_loading_datasets = False
+        self._browser_loading_index = False
+        self._browser_loading_tables: set[str] = set()
+        self._browser_index_ready = False
+        self._browser_rendering = False
+        self._browser_pending_key: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield DataTable(id="result-table")
-        with Vertical(id="column-picker"):
-            yield Input(placeholder="Filter columns…", id="column-filter")
-            yield OptionList(id="column-list")
-        with Vertical(id="export-picker"):
-            yield Input(placeholder="Filter formats…", id="export-filter")
-            yield OptionList(id="export-list")
-        yield Input(placeholder="Search value…", id="cell-search")
-        yield Label("Page: 1/1  ·  ? for help", id="page-bar")
+        with Horizontal(id="app-layout"):
+            with Vertical(id="browser-panel"):
+                yield Input(placeholder="Search datasets or tables…", id="browser-search")
+                yield Tree("datasets", id="browser-tree")
+                yield Label("0 datasets", id="browser-status")
+            with Vertical(id="main-pane"):
+                yield DataTable(id="result-table")
+                with Vertical(id="column-picker"):
+                    yield Input(placeholder="Filter columns…", id="column-filter")
+                    yield OptionList(id="column-list")
+                with Vertical(id="export-picker"):
+                    yield Input(placeholder="Filter formats…", id="export-filter")
+                    yield OptionList(id="export-list")
+                yield Input(placeholder="Search value…", id="cell-search")
+                yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
     def on_mount(self) -> None:
         table = self.query_one("#result-table", DataTable)
         table.cursor_type = "cell"
+        browser_tree = self.query_one("#browser-tree", Tree)
+        browser_tree.show_root = False
+        browser_tree.auto_expand = False
+        browser_tree.root.expand()
+        self._close_browser_search()
+        self._render_browser()
+        table.focus()
         self._load_page(0)
 
     @on(DataTable.CellHighlighted)
@@ -217,6 +281,336 @@ class QueryResultApp(App):
         self._export_format = None
         self.query_one("#result-table", DataTable).focus()
 
+    def _browser_focus_active(self) -> bool:
+        if not self._browser_widgets_ready():
+            return False
+        focused_id = getattr(self.focused, "id", None)
+        return self.query_one("#browser-panel", Vertical).display and focused_id in {
+            "browser-search",
+            "browser-tree",
+        }
+
+    def _browser_widgets_ready(self) -> bool:
+        try:
+            self.query_one("#browser-tree", Tree)
+            self.query_one("#browser-status", Label)
+        except NoMatches:
+            return False
+        return True
+
+    def action_toggle_browser(self) -> None:
+        panel = self.query_one("#browser-panel", Vertical)
+        panel.display = not panel.display
+        if panel.display:
+            self._ensure_browser_datasets()
+            self._ensure_browser_index()
+            self._close_browser_search()
+            self._render_browser()
+            self._focus_browser_tree()
+            return
+        self._browser_pending_key = None
+        self._close_browser_search()
+        self.query_one("#result-table", DataTable).focus()
+
+    def _focus_browser_tree(self) -> None:
+        tree = self.query_one("#browser-tree", Tree)
+        if tree.cursor_node is None and tree.root.children:
+            tree.select_node(tree.root.children[0])
+        tree.focus()
+
+    def _open_browser_search(self) -> None:
+        search = self.query_one("#browser-search", Input)
+        search.display = True
+        search.value = self._browser_query
+        search.focus()
+
+    def _close_browser_search(self) -> None:
+        search = self.query_one("#browser-search", Input)
+        self._browser_query = search.value
+        search.display = False
+
+    def _ensure_browser_datasets(self) -> None:
+        if self._browser_dataset_ids or self._browser_loading_datasets:
+            return
+        self._browser_loading_datasets = True
+        self._update_browser_status()
+        self._load_browser_datasets()
+
+    @work(thread=True)
+    def _load_browser_datasets(self) -> None:
+        try:
+            dataset_ids = list_dataset_ids(self.bq_client)
+        except Exception as exc:
+            self.call_from_thread(self._on_browser_datasets_failed, str(exc))
+            return
+        self.call_from_thread(self._on_browser_datasets_loaded, dataset_ids)
+
+    def _on_browser_datasets_loaded(self, dataset_ids: list[str]) -> None:
+        self._browser_loading_datasets = False
+        self._browser_dataset_ids = dataset_ids
+        if self._browser_selected_dataset not in dataset_ids:
+            self._browser_selected_dataset = None
+        self._render_browser()
+        if self.query_one("#browser-panel", Vertical).display:
+            self._ensure_browser_index()
+
+    def _on_browser_datasets_failed(self, error: str) -> None:
+        self._browser_loading_datasets = False
+        self._render_browser()
+        self.notify(f"Browser load failed: {error}", severity="error")
+
+    def _ensure_browser_index(self) -> None:
+        if (
+            not self._browser_dataset_ids
+            or self._browser_loading_index
+            or self._browser_index_ready
+        ):
+            return
+        self._browser_loading_index = True
+        self._update_browser_status()
+        self._load_browser_index(tuple(self._browser_dataset_ids))
+
+    @work(thread=True)
+    def _load_browser_index(self, dataset_ids: tuple[str, ...]) -> None:
+        try:
+            tables_by_dataset = build_table_index(self.bq_client, dataset_ids)
+        except Exception as exc:
+            self.call_from_thread(self._on_browser_index_failed, str(exc))
+            return
+        self.call_from_thread(self._on_browser_index_loaded, tables_by_dataset)
+
+    def _on_browser_index_loaded(self, tables_by_dataset: dict[str, tuple[str, ...]]) -> None:
+        self._browser_loading_index = False
+        self._browser_index_ready = True
+        self._browser_tables_by_dataset.update(tables_by_dataset)
+        self._render_browser()
+
+    def _on_browser_index_failed(self, error: str) -> None:
+        self._browser_loading_index = False
+        self._render_browser()
+        self.notify(f"Table index failed: {error}", severity="error")
+
+    def _ensure_browser_dataset_tables(self, dataset_id: str) -> None:
+        if (
+            self._browser_index_ready
+            or dataset_id in self._browser_tables_by_dataset
+            or dataset_id in self._browser_loading_tables
+        ):
+            return
+        self._browser_loading_tables.add(dataset_id)
+        self._update_browser_status()
+        self._load_browser_dataset_tables(dataset_id)
+
+    @work(thread=True)
+    def _load_browser_dataset_tables(self, dataset_id: str) -> None:
+        try:
+            table_ids = list_dataset_tables(self.bq_client, dataset_id)
+        except Exception as exc:
+            self.call_from_thread(self._on_browser_dataset_tables_failed, dataset_id, str(exc))
+            return
+        self.call_from_thread(self._on_browser_dataset_tables_loaded, dataset_id, table_ids)
+
+    def _on_browser_dataset_tables_loaded(
+        self, dataset_id: str, table_ids: tuple[str, ...]
+    ) -> None:
+        self._browser_loading_tables.discard(dataset_id)
+        self._browser_tables_by_dataset[dataset_id] = table_ids
+        self._render_browser()
+
+    def _on_browser_dataset_tables_failed(self, dataset_id: str, error: str) -> None:
+        self._browser_loading_tables.discard(dataset_id)
+        self._render_browser()
+        self.notify(f"Dataset browser failed for {dataset_id}: {error}", severity="error")
+
+    def _browser_matches(self) -> list[BrowserMatch]:
+        if self._browser_query.strip():
+            return filter_browser_matches(
+                self._browser_dataset_ids,
+                self._browser_tables_by_dataset,
+                self._browser_query,
+            )
+
+        matches: list[BrowserMatch] = []
+        for dataset_id in self._browser_dataset_ids:
+            tables = ()
+            if dataset_id == self._browser_selected_dataset:
+                tables = tuple(
+                    f"{dataset_id}.{table_id}"
+                    for table_id in self._browser_tables_by_dataset.get(dataset_id, ())
+                )
+            matches.append(BrowserMatch(dataset_id=dataset_id, tables=tables))
+        return matches
+
+    def _render_browser(self) -> None:
+        if not self._browser_widgets_ready():
+            return
+        tree = self.query_one("#browser-tree", Tree)
+        search = self.query_one("#browser-search", Input)
+        tree.root.remove_children()
+        tree.root.expand()
+
+        matches = self._browser_matches()
+        dataset_nodes: dict[str, Any] = {}
+
+        self._browser_rendering = True
+        try:
+            if not self._browser_dataset_ids and not self._browser_loading_datasets:
+                tree.root.add_leaf("(no datasets)")
+            elif not matches and self._browser_query.strip():
+                tree.root.add_leaf("(no matches)")
+            else:
+                for match in matches:
+                    dataset_node = tree.root.add(
+                        match.dataset_id,
+                        data=("dataset", match.dataset_id),
+                        expand=bool(match.tables),
+                    )
+                    dataset_nodes[match.dataset_id] = dataset_node
+                    for table_name in match.tables:
+                        _, table_id = table_name.split(".", 1)
+                        dataset_node.add_leaf(
+                            table_name,
+                            data=("table", match.dataset_id, table_id),
+                        )
+
+            target_dataset = self._browser_selected_dataset
+            if target_dataset is None and self._browser_query.strip() and matches:
+                target_dataset = matches[0].dataset_id
+
+            if target_dataset in dataset_nodes:
+                tree.select_node(dataset_nodes[target_dataset])
+            elif tree.root.children and tree.has_focus:
+                tree.select_node(tree.root.children[0])
+            else:
+                tree.select_node(None)
+        finally:
+            self._browser_rendering = False
+
+        if search.display:
+            search.value = self._browser_query
+        self._update_browser_status(len(matches))
+
+    def _update_browser_status(self, match_count: int | None = None) -> None:
+        if not self._browser_widgets_ready():
+            return
+        if self._browser_loading_datasets:
+            status = "Loading datasets…"
+        elif self._browser_loading_tables:
+            pending = len(self._browser_loading_tables)
+            status = f"Loading {pending} dataset{'s' if pending != 1 else ''}…"
+        elif self._browser_loading_index:
+            status = f"{len(self._browser_dataset_ids)} datasets · loading tables…"
+        elif self._browser_query.strip():
+            count = 0 if match_count is None else match_count
+            status = f"{count} match{'es' if count != 1 else ''}"
+        else:
+            count = len(self._browser_dataset_ids)
+            status = f"{count} dataset{'s' if count != 1 else ''}"
+        self.query_one("#browser-status", Label).update(status)
+
+    def _select_browser_dataset(self, dataset_id: str) -> None:
+        if not dataset_id:
+            return
+        self._browser_selected_dataset = dataset_id
+        self._ensure_browser_dataset_tables(dataset_id)
+        self._render_browser()
+
+    def _collapse_browser_cursor(self) -> None:
+        if self._browser_query.strip():
+            return
+        tree = self.query_one("#browser-tree", Tree)
+        node = tree.cursor_node
+        if node is None or not node.data:
+            return
+        kind = node.data[0]
+        if kind == "table" and node.parent is not None:
+            node = node.parent
+        if node.data and node.data[0] == "dataset":
+            dataset_id = node.data[1]
+            if self._browser_selected_dataset == dataset_id:
+                self._browser_selected_dataset = None
+                self._render_browser()
+
+    def _activate_browser_cursor(self) -> None:
+        node = self.query_one("#browser-tree", Tree).cursor_node
+        if node is None or not node.data:
+            return
+        if node.data[0] == "dataset":
+            self._select_browser_dataset(node.data[1])
+
+    def _move_browser_cursor_first(self) -> None:
+        tree = self.query_one("#browser-tree", Tree)
+        if tree.root.children:
+            tree.move_cursor_to_line(0)
+
+    def _move_browser_cursor_last(self) -> None:
+        tree = self.query_one("#browser-tree", Tree)
+        if tree.root.children:
+            tree.move_cursor_to_line(tree.last_line)
+
+    def _handle_browser_key(self, event: Key) -> bool:
+        if not self._browser_focus_active():
+            return False
+
+        focused_id = getattr(self.focused, "id", None)
+        tree = self.query_one("#browser-tree", Tree)
+
+        if focused_id == "browser-search":
+            if event.key == "enter":
+                self._close_browser_search()
+                self._focus_browser_tree()
+                event.prevent_default()
+                event.stop()
+                return True
+            if event.key == "escape":
+                self._close_browser_search()
+                self._focus_browser_tree()
+                event.prevent_default()
+                event.stop()
+                return True
+            self._browser_pending_key = None
+            return False
+
+        if focused_id == "browser-tree":
+            if self._browser_pending_key == "g":
+                self._browser_pending_key = None
+                if event.key == "g":
+                    self._move_browser_cursor_first()
+                    event.prevent_default()
+                    event.stop()
+                return True
+
+            if event.key == "g":
+                self._browser_pending_key = "g"
+                self.set_timer(0.4, self._on_browser_pending_timeout)
+                event.prevent_default()
+                event.stop()
+                return True
+
+            if event.key in {"j", "down"}:
+                tree.action_cursor_down()
+            elif event.key in {"k", "up"}:
+                tree.action_cursor_up()
+            elif event.key in {"l", "right", "enter"}:
+                self._activate_browser_cursor()
+            elif event.key in {"h", "left"}:
+                self._collapse_browser_cursor()
+            elif event.key == "G":
+                self._move_browser_cursor_last()
+            elif event.key == "slash":
+                self._open_browser_search()
+            elif event.key in {"escape", "b"}:
+                self.action_toggle_browser()
+            else:
+                self._browser_pending_key = None
+                return True
+            self._browser_pending_key = None
+            event.prevent_default()
+            event.stop()
+            return True
+
+        return False
+
     def _navigate_option_list(self, list_id: str, event: Key) -> None:
         opt = self.query_one(list_id, OptionList)
         if opt.option_count == 0:
@@ -232,6 +626,12 @@ class QueryResultApp(App):
             event.stop()
 
     def on_key(self, event: Key) -> None:
+        if self._handle_browser_key(event):
+            return
+
+        if self._browser_focus_active() and getattr(self.focused, "id", None) == "browser-search":
+            return
+
         # When a picker is focused, handle escape and arrow navigation
         if self._picker_active():
             if event.key == "escape":
@@ -240,6 +640,12 @@ class QueryResultApp(App):
                 event.stop()
             elif self.query_one("#column-picker", Vertical).display:
                 self._navigate_option_list("#column-list", event)
+            return
+
+        if event.key == "b":
+            self.action_toggle_browser()
+            event.prevent_default()
+            event.stop()
             return
 
         # Escape clears search matches
@@ -368,6 +774,9 @@ class QueryResultApp(App):
         elif self._pending_key == "y":
             self._pending_key = None
 
+    def _on_browser_pending_timeout(self) -> None:
+        self._browser_pending_key = None
+
     def _clear_pending(self) -> None:
         self._pending_key = None
 
@@ -397,6 +806,28 @@ class QueryResultApp(App):
             )
         else:
             self.notify("No matches found", severity="warning")
+
+    @on(Input.Changed, "#browser-search")
+    def _on_browser_search_changed(self, event: Input.Changed) -> None:
+        self._browser_query = event.value
+        if self._browser_query.strip():
+            self._ensure_browser_index()
+        self._render_browser()
+
+    @on(Input.Submitted, "#browser-search")
+    def _on_browser_search_submitted(self, event: Input.Submitted) -> None:
+        self._browser_query = event.value
+        self._render_browser()
+        self._close_browser_search()
+        self._focus_browser_tree()
+
+    @on(Tree.NodeHighlighted, "#browser-tree")
+    def _on_browser_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        return None
+
+    @on(Tree.NodeSelected, "#browser-tree")
+    def _on_browser_node_selected(self, event: Tree.NodeSelected) -> None:
+        return None
 
     def _open_column_picker(self) -> None:
         picker = self.query_one("#column-picker", Vertical)
