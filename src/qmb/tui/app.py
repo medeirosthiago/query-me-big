@@ -32,6 +32,10 @@ from qmb.bigquery.browser import (
     BrowserMatch,
     build_table_index,
     filter_browser_matches,
+    format_dataset_details,
+    format_table_details,
+    get_dataset_metadata,
+    get_table_metadata,
     list_dataset_ids,
     list_dataset_tables,
 )
@@ -76,7 +80,7 @@ Search
 Browser
   b             Toggle dataset browser
   /             Search datasets and tables
-  Enter         Expand selected dataset
+  Enter / d     Open dataset or table details in nvim
   h/l           Collapse/expand selected dataset
   gg / G        First/last browser item
   Escape        Close browser (or exit browser search)
@@ -154,6 +158,13 @@ class QueryResultApp(App):
     #main-pane {
         width: 1fr;
     }
+    .browser-only #browser-panel {
+        width: 1fr;
+        min-width: 0;
+    }
+    .browser-only #main-pane {
+        display: none;
+    }
     #result-table {
         height: 1fr;
     }
@@ -201,6 +212,8 @@ class QueryResultApp(App):
         source_label: str,
         resolved_sql: str = "",
         page_size: int = 200,
+        start_in_browser: bool = False,
+        browser_only: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -209,6 +222,8 @@ class QueryResultApp(App):
         self.source_label = source_label
         self.resolved_sql = resolved_sql
         self.page_size = page_size
+        self.start_in_browser = start_in_browser
+        self.browser_only = browser_only
         self.current_page = 0
         self._raw_rows: list[dict[str, Any]] = []
         self._column_names: list[str] = []
@@ -247,6 +262,8 @@ class QueryResultApp(App):
                 yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
     def on_mount(self) -> None:
+        if self.browser_only:
+            self.add_class("browser-only")
         table = self.query_one("#result-table", DataTable)
         table.cursor_type = "cell"
         browser_tree = self.query_one("#browser-tree", Tree)
@@ -255,8 +272,21 @@ class QueryResultApp(App):
         browser_tree.root.expand()
         self._close_browser_search()
         self._render_browser()
+        if self.start_in_browser:
+            panel = self.query_one("#browser-panel", Vertical)
+            panel.display = True
+            self._ensure_browser_datasets()
+            self._ensure_browser_index()
+            self._focus_browser_tree()
+            self._render_browser()
+            return
         table.focus()
-        self._load_page(0)
+        if self.handle.destination_table and self.handle.total_rows > 0:
+            self._load_page(0)
+        else:
+            self._render_page(
+                PageResult(rows=[], display_rows=[], page=0, total_pages=1, total_rows=0)
+            )
 
     @on(DataTable.CellHighlighted)
     def _enforce_min_column(self, event: DataTable.CellHighlighted) -> None:
@@ -538,6 +568,30 @@ class QueryResultApp(App):
         if node.data[0] == "dataset":
             self._select_browser_dataset(node.data[1])
 
+    def _open_browser_details(self) -> None:
+        node = self.query_one("#browser-tree", Tree).cursor_node
+        if node is None or not node.data:
+            self.notify("No browser item selected", severity="warning")
+            return
+
+        try:
+            if node.data[0] == "dataset":
+                dataset_id = node.data[1]
+                dataset = get_dataset_metadata(self.bq_client, dataset_id)
+                details = format_dataset_details(dataset)
+                self._open_in_nvim(details, suffix=".txt", prefix=f"qmb_dataset_{dataset_id}_")
+                return
+
+            if node.data[0] == "table":
+                dataset_id = node.data[1]
+                table_id = node.data[2]
+                table = get_table_metadata(self.bq_client, dataset_id, table_id)
+                details = format_table_details(table)
+                self._open_in_nvim(details, suffix=".txt", prefix=f"qmb_table_{table_id}_")
+                return
+        except Exception as exc:
+            self.notify(f"Browser details failed: {exc}", severity="error")
+
     def _move_browser_cursor_first(self) -> None:
         tree = self.query_one("#browser-tree", Tree)
         if tree.root.children:
@@ -591,8 +645,10 @@ class QueryResultApp(App):
                 tree.action_cursor_down()
             elif event.key in {"k", "up"}:
                 tree.action_cursor_up()
-            elif event.key in {"l", "right", "enter"}:
+            elif event.key in {"l", "right"}:
                 self._activate_browser_cursor()
+            elif event.key in {"enter", "d"}:
+                self._open_browser_details()
             elif event.key in {"h", "left"}:
                 self._collapse_browser_cursor()
             elif event.key == "G":

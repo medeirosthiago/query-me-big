@@ -119,6 +119,14 @@ def run(
         str | None,
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
     ] = None,
+    browser_only: Annotated[
+        bool,
+        typer.Option(
+            "--browser-only",
+            "--browse",
+            help="Open the dataset/table browser without running a query",
+        ),
+    ] = False,
 
 ) -> None:
     """Run a BigQuery query with optional dbt model resolution."""
@@ -126,13 +134,24 @@ def run(
 
     # Validate mutually exclusive inputs
     inputs = sum(x is not None for x in [query, file, model])
-    if inputs == 0:
+    if browser_only and inputs > 0:
+        raise typer.BadParameter(
+            "--browser-only cannot be combined with query, --file, or --model."
+        )
+    if browser_only and (export or out or no_tui or dry_run or max_bytes_billed or where):
+        raise typer.BadParameter(
+            "--browser-only cannot be combined with export, --no-tui, --dry-run, "
+            "--max-bytes-billed, or --where."
+        )
+    if not browser_only and inputs == 0:
         raise typer.BadParameter("Provide one of query, --file, or --model.")
     if inputs > 1:
         raise typer.BadParameter("Provide only one of query, --file, or --model.")
 
     # Determine mode
-    if query is not None:
+    if browser_only:
+        mode = InputMode.BROWSER
+    elif query is not None:
         mode = InputMode.SQL
     elif file is not None:
         if str(file) == "-":
@@ -211,6 +230,29 @@ def _execute(request: QueryRequest) -> None:
     from qmb.bigquery.client import get_client
     from qmb.bigquery.executor import execute_query
     from qmb.bigquery.exporters import export_results
+    from qmb.tui.app import QueryResultApp
+    from qmb.types import QueryResultHandle
+
+    client = get_client(request.project, request.location)
+
+    if request.mode.name == "BROWSER":
+        tui = QueryResultApp(
+            bq_client=client,
+            handle=QueryResultHandle(
+                job_id="",
+                project=client.project or request.project or "",
+                location=request.location or getattr(client, "location", None) or "",
+                destination_table="",
+                schema=[],
+                total_rows=0,
+            ),
+            source_label="browser",
+            page_size=request.page_size,
+            start_in_browser=True,
+            browser_only=True,
+        )
+        tui.run()
+        return
 
     # Step 1: Resolve SQL
     resolved = _resolve_sql(request)
@@ -225,8 +267,6 @@ def _execute(request: QueryRequest) -> None:
         )
 
     # Step 2: Execute
-    client = get_client(request.project, request.location)
-
     if request.dry_run:
         handle = execute_query(
             client, resolved, dry_run=True, max_bytes_billed=request.max_bytes_billed
@@ -261,8 +301,6 @@ def _execute(request: QueryRequest) -> None:
     if handle.total_rows == 0:
         console.print("[yellow]No rows to display.[/yellow]")
         return
-
-    from qmb.tui.app import QueryResultApp
 
     tui = QueryResultApp(
         bq_client=client,
@@ -343,6 +381,9 @@ def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
 
         index = load_manifest(request.manifest_path)
         return resolve_model_query(request.model_name, index, request.variables)
+
+    if request.mode == InputMode.BROWSER:
+        raise typer.BadParameter("Browser mode does not resolve SQL.")
 
     raise typer.BadParameter(f"Unknown mode: {request.mode}")
 

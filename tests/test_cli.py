@@ -40,3 +40,28 @@ def test_file_mode_resolve_dbt_auto_discovers_manifest(
     assert request.mode == InputMode.FILE
     assert request.resolve_dbt is True
     assert request.manifest_path == manifest_path
+
+
+def test_browser_only_mode_builds_browser_request(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_execute(request) -> None:
+        captured["request"] = request
+
+    monkeypatch.setattr(cli, "_execute", fake_execute)
+
+    result = CliRunner().invoke(cli.app, ["--browser-only", "--project", "proj"])
+
+    assert result.exit_code == 0, result.output
+    request = captured["request"]
+    assert request.mode == InputMode.BROWSER
+    assert request.project == "proj"
+
+
+def test_browser_only_mode_rejects_query_inputs(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_execute", lambda request: None)
+
+    result = CliRunner().invoke(cli.app, ["select 1", "--browser-only"])
+
+    assert result.exit_code != 0
+    assert "cannot be combined" in result.output

@@ -21,6 +21,7 @@ class InputMode(enum.Enum):
     SQL = "sql"
     FILE = "file"
     MODEL = "model"
+    BROWSER = "browser"
 
 
 class ExportFormat(enum.Enum):
