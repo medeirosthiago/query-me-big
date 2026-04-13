@@ -4,6 +4,8 @@ import csv
 import io
 import json
 import math
+import os
+import shlex
 import subprocess
 import tempfile
 from datetime import datetime
@@ -40,6 +42,7 @@ from qmb.bigquery.browser import (
     list_dataset_tables,
 )
 from qmb.bigquery.exporters import export_results
+from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
@@ -99,6 +102,9 @@ Export
   x             Open export picker
   xc            Quick export to CSV
   xj            Quick export to JSON
+
+History
+  r             Browse recent query history
 
 Other
   ?             Show this help
@@ -173,16 +179,16 @@ class QueryResultApp(App):
         background: $boost;
         padding: 0 1;
     }
-    #column-picker, #export-picker {
+    #column-picker, #export-picker, #history-picker {
         display: none;
         height: auto;
         max-height: 16;
         border: tall $accent;
     }
-    #column-filter, #export-filter {
+    #column-filter, #export-filter, #history-filter {
         height: 3;
     }
-    #column-list, #export-list {
+    #column-list, #export-list, #history-list {
         height: auto;
         max-height: 12;
     }
@@ -214,6 +220,7 @@ class QueryResultApp(App):
         page_size: int = 200,
         start_in_browser: bool = False,
         browser_only: bool = False,
+        history_entries: list[QueryHistoryEntry] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -243,6 +250,9 @@ class QueryResultApp(App):
         self._browser_index_ready = False
         self._browser_rendering = False
         self._browser_pending_key: str | None = None
+        self._history_entries: list[QueryHistoryEntry] = history_entries or []
+        self._filtered_history: list[int] = []
+        self._history_loading = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="app-layout"):
@@ -258,6 +268,9 @@ class QueryResultApp(App):
                 with Vertical(id="export-picker"):
                     yield Input(placeholder="Filter formats…", id="export-filter")
                     yield OptionList(id="export-list")
+                with Vertical(id="history-picker"):
+                    yield Input(placeholder="Search recent queries…", id="history-filter")
+                    yield OptionList(id="history-list")
                 yield Input(placeholder="Search value…", id="cell-search")
                 yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
@@ -272,6 +285,9 @@ class QueryResultApp(App):
         browser_tree.root.expand()
         self._close_browser_search()
         self._render_browser()
+        if self._history_entries:
+            self._open_history_picker()
+            return
         if self.start_in_browser:
             panel = self.query_one("#browser-panel", Vertical)
             panel.display = True
@@ -299,6 +315,7 @@ class QueryResultApp(App):
         return (
             self.query_one("#column-picker", Vertical).display
             or self.query_one("#export-picker", Vertical).display
+            or self.query_one("#history-picker", Vertical).display
             or self.query_one("#cell-search", Input).display
         )
 
@@ -307,6 +324,7 @@ class QueryResultApp(App):
         self.query_one("#export-picker", Vertical).display = False
         self.query_one("#export-list", OptionList).display = True
         self.query_one("#export-filter", Input).display = True
+        self.query_one("#history-picker", Vertical).display = False
         self.query_one("#cell-search", Input).display = False
         self._export_format = None
         self.query_one("#result-table", DataTable).focus()
@@ -579,7 +597,7 @@ class QueryResultApp(App):
                 dataset_id = node.data[1]
                 dataset = get_dataset_metadata(self.bq_client, dataset_id)
                 details = format_dataset_details(dataset)
-                self._open_in_nvim(details, suffix=".txt", prefix=f"qmb_dataset_{dataset_id}_")
+                self._open_in_editor(details, suffix=".txt", prefix=f"qmb_dataset_{dataset_id}_")
                 return
 
             if node.data[0] == "table":
@@ -587,7 +605,7 @@ class QueryResultApp(App):
                 table_id = node.data[2]
                 table = get_table_metadata(self.bq_client, dataset_id, table_id)
                 details = format_table_details(table)
-                self._open_in_nvim(details, suffix=".txt", prefix=f"qmb_table_{table_id}_")
+                self._open_in_editor(details, suffix=".txt", prefix=f"qmb_table_{table_id}_")
                 return
         except Exception as exc:
             self.notify(f"Browser details failed: {exc}", severity="error")
@@ -696,6 +714,8 @@ class QueryResultApp(App):
                 event.stop()
             elif self.query_one("#column-picker", Vertical).display:
                 self._navigate_option_list("#column-list", event)
+            elif self.query_one("#history-picker", Vertical).display:
+                self._navigate_option_list("#history-list", event)
             return
 
         if event.key == "b":
@@ -782,6 +802,12 @@ class QueryResultApp(App):
 
         if event.key == "f":
             self._open_column_picker()
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "r":
+            self._load_and_open_history()
             event.prevent_default()
             event.stop()
             return
@@ -1033,22 +1059,39 @@ class QueryResultApp(App):
         except (json.JSONDecodeError, TypeError):
             pass
 
-        self._open_in_nvim(full_text, suffix=ext, prefix=f"qmb_{col_name}_")
+        self._open_in_editor(full_text, suffix=ext, prefix=f"qmb_{col_name}_")
 
     def action_vim_query(self) -> None:
-        self._open_in_nvim(self.resolved_sql, suffix=".sql", prefix="qmb_query_")
+        self._open_in_editor(self.resolved_sql, suffix=".sql", prefix="qmb_query_")
 
-    def _open_in_nvim(self, content: str, suffix: str, prefix: str) -> None:
+    def _open_in_editor(
+        self,
+        content: str,
+        *,
+        suffix: str,
+        prefix: str,
+        read_only: bool = True,
+    ) -> None:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=suffix, prefix=prefix, delete=False
         ) as f:
             f.write(content)
             tmp_path = f.name
 
-        with self.suspend():
-            subprocess.run(["nvim", "-R", tmp_path])
+        editor = os.environ.get("EDITOR", "nvim")
+        cmd = shlex.split(editor)
+        exe = Path(cmd[0]).name
 
-        Path(tmp_path).unlink(missing_ok=True)
+        if read_only and exe in {"nvim", "vim", "vi"}:
+            cmd.append("-R")
+
+        cmd.append(tmp_path)
+
+        try:
+            with self.suspend():
+                subprocess.run(cmd, check=False)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
     # -- export picker ------------------------------------------------------
 
@@ -1130,6 +1173,92 @@ class QueryResultApp(App):
         except Exception as e:
             self.notify(f"Export failed: {e}", severity="error")
 
+    # -- history picker -----------------------------------------------------
+
+    def _load_and_open_history(self) -> None:
+        if self._history_entries:
+            self._open_history_picker()
+            return
+        if self._history_loading:
+            return
+        self._history_loading = True
+        self.notify("Loading query history…")
+        self._fetch_history()
+
+    @work(thread=True)
+    def _fetch_history(self) -> None:
+        from qmb.bigquery.history import list_recent_queries
+
+        try:
+            entries = list_recent_queries(self.bq_client, days=7, limit=200)
+        except Exception as exc:
+            self.call_from_thread(self._on_history_failed, str(exc))
+            return
+        self.call_from_thread(self._on_history_loaded, entries)
+
+    def _on_history_loaded(self, entries: list[QueryHistoryEntry]) -> None:
+        self._history_loading = False
+        self._history_entries = entries
+        if not entries:
+            self.notify("No recent queries found", severity="warning")
+            return
+        self._open_history_picker()
+
+    def _on_history_failed(self, error: str) -> None:
+        self._history_loading = False
+        self.notify(f"History load failed: {error}", severity="error")
+
+    def _open_history_picker(self) -> None:
+        picker = self.query_one("#history-picker", Vertical)
+        inp = self.query_one("#history-filter", Input)
+        inp.value = ""
+        picker.display = True
+        self._populate_history_list("")
+        inp.focus()
+
+    def _populate_history_list(self, query: str) -> None:
+        opt = self.query_one("#history-list", OptionList)
+        opt.clear_options()
+        self._filtered_history.clear()
+        q = query.strip().lower()
+        for i, entry in enumerate(self._history_entries):
+            date_str = f"{entry.created:%Y-%m-%d %H:%M}"
+            if q and q not in entry.query.lower() and q not in entry.job_id.lower() and q not in date_str:
+                continue
+            label = (
+                f"{date_str} · "
+                f"{fmt_bytes(entry.bytes_processed)} · "
+                f"{entry.preview}"
+            )
+            opt.add_option(label)
+            self._filtered_history.append(i)
+        if self._filtered_history:
+            opt.highlighted = 0
+
+    @on(Input.Changed, "#history-filter")
+    def _on_history_filter_changed(self, event: Input.Changed) -> None:
+        self._populate_history_list(event.value)
+
+    @on(Input.Submitted, "#history-filter")
+    def _on_history_filter_submitted(self, event: Input.Submitted) -> None:
+        opt = self.query_one("#history-list", OptionList)
+        if self._filtered_history and opt.highlighted is not None:
+            self._select_history_entry(opt.highlighted)
+
+    @on(OptionList.OptionSelected, "#history-list")
+    def _on_history_selected(self, event: OptionList.OptionSelected) -> None:
+        self._select_history_entry(event.option_index)
+
+    def _select_history_entry(self, option_idx: int) -> None:
+        if option_idx < 0 or option_idx >= len(self._filtered_history):
+            return
+        entry = self._history_entries[self._filtered_history[option_idx]]
+        self._dismiss_picker()
+        self._open_in_editor(
+            entry.query, suffix=".sql", prefix="qmb_history_", read_only=False
+        )
+        self._open_history_picker()
+
     # -- job details --------------------------------------------------------
 
     def action_vim_job_details(self) -> None:
@@ -1151,7 +1280,7 @@ class QueryResultApp(App):
             f"  Processed:     {fmt_bytes(h.bytes_processed)}",
             f"  Duration:      {duration}",
         ])
-        self._open_in_nvim(details, suffix=".txt", prefix="qmb_job_")
+        self._open_in_editor(details, suffix=".txt", prefix="qmb_job_")
 
     # -- help ---------------------------------------------------------------
 

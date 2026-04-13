@@ -1,11 +1,12 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 from google.cloud.bigquery.schema import SchemaField
-from textual.widgets import Input, Tree
+from textual.widgets import Input, OptionList, Tree
 
+from qmb.bigquery.history import QueryHistoryEntry
 from qmb.tui.app import QueryResultApp
 from qmb.types import ExportFormat, PageResult, QueryResultHandle
 
@@ -194,8 +195,8 @@ def test_browser_enter_opens_dataset_details(monkeypatch) -> None:
         app = QueryResultApp(client, _handle(), "ad-hoc", "select 1")
         app._browser_dataset_ids = ["dataset1"]
         app._browser_index_ready = True
-        app._open_in_nvim = lambda content, suffix, prefix: captured.update(
-            {"content": content, "suffix": suffix, "prefix": prefix}
+        app._open_in_editor = lambda content, **kw: captured.update(
+            {"content": content, **kw}
         )
 
         async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
@@ -226,8 +227,8 @@ def test_browser_enter_opens_table_details(monkeypatch) -> None:
         app._browser_dataset_ids = ["dataset1"]
         app._browser_tables_by_dataset = {"dataset1": ("table1",)}
         app._browser_index_ready = True
-        app._open_in_nvim = lambda content, suffix, prefix: captured.update(
-            {"content": content, "suffix": suffix, "prefix": prefix}
+        app._open_in_editor = lambda content, **kw: captured.update(
+            {"content": content, **kw}
         )
 
         async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
@@ -384,6 +385,130 @@ def test_browser_search_escape_returns_to_navigation(monkeypatch) -> None:
                 ("dataset1", ["dataset1.table1"]),
                 ("dataset2", ["dataset2.table2"]),
             ]
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def _make_history_entry(query="SELECT 1", hours_ago=0):
+    return QueryHistoryEntry(
+        job_id=f"job-{hours_ago}",
+        project="proj",
+        location="US",
+        created=datetime(2026, 4, 13, 14, 0, tzinfo=UTC) - timedelta(hours=hours_ago),
+        query=query,
+        bytes_processed=1024,
+    )
+
+
+def test_history_picker_opens_with_entries(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [_make_history_entry("SELECT 1", 0), _make_history_entry("SELECT 2", 1)]
+        app = QueryResultApp(
+            DummyBigQueryClient(), _handle(), "ad-hoc", "select 1", history_entries=entries
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            assert app.query_one("#history-picker").display is True
+            assert app.query_one("#history-filter", Input).has_focus
+            assert app.query_one("#history-list", OptionList).option_count == 2
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_history_picker_filters_by_query_text(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [
+            _make_history_entry("SELECT * FROM orders", 0),
+            _make_history_entry("SELECT * FROM users", 1),
+            _make_history_entry("INSERT INTO logs", 2),
+        ]
+        app = QueryResultApp(
+            DummyBigQueryClient(), _handle(), "ad-hoc", "select 1", history_entries=entries
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            inp = app.query_one("#history-filter", Input)
+            inp.value = "orders"
+            await pilot.pause()
+
+            assert app.query_one("#history-list", OptionList).option_count == 1
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_history_picker_filters_by_date(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [
+            _make_history_entry("SELECT 1", 0),  # 2026-04-13
+            _make_history_entry("SELECT 2", 72),  # 2026-04-10
+        ]
+        app = QueryResultApp(
+            DummyBigQueryClient(), _handle(), "ad-hoc", "select 1", history_entries=entries
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            inp = app.query_one("#history-filter", Input)
+            inp.value = "2026-04-10"
+            await pilot.pause()
+
+            assert app.query_one("#history-list", OptionList).option_count == 1
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_history_picker_opens_editor_and_reopens(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [_make_history_entry("SELECT * FROM orders", 0)]
+        app = QueryResultApp(
+            DummyBigQueryClient(), _handle(), "ad-hoc", "select 1", history_entries=entries
+        )
+
+        captured: dict[str, object] = {}
+        app._open_in_editor = lambda content, **kw: captured.update(
+            {"content": content, **kw}
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            app._select_history_entry(0)
+            await pilot.pause()
+
+            assert captured["content"] == "SELECT * FROM orders"
+            assert captured["suffix"] == ".sql"
+            assert captured["read_only"] is False
+            assert app.query_one("#history-picker").display is True
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_history_picker_dismiss_on_escape(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [_make_history_entry("SELECT 1", 0)]
+        app = QueryResultApp(
+            DummyBigQueryClient(), _handle(), "ad-hoc", "select 1", history_entries=entries
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            assert app.query_one("#history-picker").display is True
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert app.query_one("#history-picker").display is False
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
     asyncio.run(run())
