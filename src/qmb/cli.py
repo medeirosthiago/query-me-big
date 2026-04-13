@@ -6,19 +6,32 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
+import click
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from typer.core import TyperGroup
 
 from qmb.types import fmt_bytes
 
 if TYPE_CHECKING:
     from qmb.types import QueryRequest, ResolvedQuery
 
+
+class _DefaultRunGroup(TyperGroup):
+    """Typer group that falls back to the 'run' command for unknown args."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args and args[0] not in self.commands:
+            args = ["run", *args]
+        return super().parse_args(ctx, args)
+
+
 app = typer.Typer(
     name="qmb",
     help="Query Me Big – Run BigQuery queries with a Textual TUI, dbt support, and export.",
     no_args_is_help=True,
+    cls=_DefaultRunGroup,
 )
 console = Console()
 
@@ -223,6 +236,64 @@ def run(
     )
 
     _execute(request)
+
+
+@app.command()
+def history(
+    days: Annotated[
+        int,
+        typer.Option("--days", "-d", help="Number of days to look back"),
+    ] = 7,
+    project: Annotated[
+        str | None,
+        typer.Option("--project", help="GCP project ID"),
+    ] = None,
+    location: Annotated[
+        str | None,
+        typer.Option("--location", help="BigQuery location (e.g. US, EU)"),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-l", help="Maximum number of queries to fetch"),
+    ] = 200,
+    page_size: Annotated[
+        int,
+        typer.Option("--page-size", help="Rows per page in TUI"),
+    ] = 200,
+) -> None:
+    """Browse recent BigQuery query history."""
+    from qmb.bigquery.client import get_client
+    from qmb.bigquery.history import list_recent_queries
+    from qmb.tui.app import QueryResultApp
+    from qmb.types import QueryResultHandle
+
+    client = get_client(project, location)
+    console.print(f"[dim]Fetching query history (last {days} days)...[/dim]")
+
+    entries = list_recent_queries(client, days=days, limit=limit)
+    if not entries:
+        console.print("[yellow]No recent queries found.[/yellow]")
+        return
+
+    console.print(f"[green]✓[/green] Found {len(entries)} recent queries")
+
+    tui = QueryResultApp(
+        bq_client=client,
+        handle=QueryResultHandle(
+            job_id="",
+            project=client.project or project or "",
+            location=location or getattr(client, "location", None) or "",
+            destination_table="",
+            schema=[],
+            total_rows=0,
+        ),
+        source_label="history",
+        page_size=page_size,
+        start_in_browser=False,
+        browser_only=False,
+        history_entries=entries,
+    )
+    tui.run()
 
 
 def _execute(request: QueryRequest) -> None:
