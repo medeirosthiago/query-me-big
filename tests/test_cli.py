@@ -42,29 +42,28 @@ def test_file_mode_resolve_dbt_auto_discovers_manifest(
     assert request.manifest_path == manifest_path
 
 
-def test_browser_only_mode_builds_browser_request(monkeypatch) -> None:
+def test_browse_command_routes_correctly(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_execute(request) -> None:
-        captured["request"] = request
+    class FakeClient:
+        project = "proj"
 
-    monkeypatch.setattr(cli, "_execute", fake_execute)
+    class FakeApp:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
 
-    result = CliRunner().invoke(cli.app, ["run", "--browser-only", "--project", "proj"])
+        def run(self):
+            pass
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", FakeApp.__init__)
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.run", FakeApp.run)
+
+    result = CliRunner().invoke(cli.app, ["browse", "--project", "proj"])
 
     assert result.exit_code == 0, result.output
-    request = captured["request"]
-    assert request.mode == InputMode.BROWSER
-    assert request.project == "proj"
-
-
-def test_browser_only_mode_rejects_query_inputs(monkeypatch) -> None:
-    monkeypatch.setattr(cli, "_execute", lambda request: None)
-
-    result = CliRunner().invoke(cli.app, ["run", "select 1", "--browser-only"])
-
-    assert result.exit_code != 0
-    assert "cannot be combined" in result.output
+    assert captured["browser_only"] is True
+    assert captured["source_label"] == "browser"
 
 
 def test_default_run_group_routes_options_to_run(monkeypatch, tmp_path: Path) -> None:

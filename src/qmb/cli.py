@@ -132,39 +132,19 @@ def run(
         str | None,
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
     ] = None,
-    browser_only: Annotated[
-        bool,
-        typer.Option(
-            "--browser-only",
-            "--browse",
-            help="Open the dataset/table browser without running a query",
-        ),
-    ] = False,
-
 ) -> None:
     """Run a BigQuery query with optional dbt model resolution."""
     from qmb.types import ExportFormat, InputMode, QueryRequest
 
     # Validate mutually exclusive inputs
     inputs = sum(x is not None for x in [query, file, model])
-    if browser_only and inputs > 0:
-        raise typer.BadParameter(
-            "--browser-only cannot be combined with query, --file, or --model."
-        )
-    if browser_only and (export or out or no_tui or dry_run or max_bytes_billed or where):
-        raise typer.BadParameter(
-            "--browser-only cannot be combined with export, --no-tui, --dry-run, "
-            "--max-bytes-billed, or --where."
-        )
-    if not browser_only and inputs == 0:
+    if inputs == 0:
         raise typer.BadParameter("Provide one of query, --file, or --model.")
     if inputs > 1:
         raise typer.BadParameter("Provide only one of query, --file, or --model.")
 
     # Determine mode
-    if browser_only:
-        mode = InputMode.BROWSER
-    elif query is not None:
+    if query is not None:
         mode = InputMode.SQL
     elif file is not None:
         if str(file) == "-":
@@ -296,34 +276,49 @@ def history(
     tui.run()
 
 
+@app.command()
+def browse(
+    project: Annotated[
+        str | None,
+        typer.Option("--project", help="GCP project ID"),
+    ] = None,
+    location: Annotated[
+        str | None,
+        typer.Option("--location", help="BigQuery location (e.g. US, EU)"),
+    ] = None,
+) -> None:
+    """Open the dataset/table browser without running a query."""
+    from qmb.bigquery.client import get_client
+    from qmb.tui.app import QueryResultApp
+    from qmb.types import QueryResultHandle
+
+    client = get_client(project, location)
+    tui = QueryResultApp(
+        bq_client=client,
+        handle=QueryResultHandle(
+            job_id="",
+            project=client.project or project or "",
+            location=location or getattr(client, "location", None) or "",
+            destination_table="",
+            schema=[],
+            total_rows=0,
+        ),
+        source_label="browser",
+        page_size=200,
+        start_in_browser=True,
+        browser_only=True,
+    )
+    tui.run()
+
+
 def _execute(request: QueryRequest) -> None:
     """Core execution pipeline."""
     from qmb.bigquery.client import get_client
     from qmb.bigquery.executor import execute_query
     from qmb.bigquery.exporters import export_results
     from qmb.tui.app import QueryResultApp
-    from qmb.types import QueryResultHandle
 
     client = get_client(request.project, request.location)
-
-    if request.mode.name == "BROWSER":
-        tui = QueryResultApp(
-            bq_client=client,
-            handle=QueryResultHandle(
-                job_id="",
-                project=client.project or request.project or "",
-                location=request.location or getattr(client, "location", None) or "",
-                destination_table="",
-                schema=[],
-                total_rows=0,
-            ),
-            source_label="browser",
-            page_size=request.page_size,
-            start_in_browser=True,
-            browser_only=True,
-        )
-        tui.run()
-        return
 
     # Step 1: Resolve SQL
     resolved = _resolve_sql(request)
@@ -452,9 +447,6 @@ def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
 
         index = load_manifest(request.manifest_path)
         return resolve_model_query(request.model_name, index, request.variables)
-
-    if request.mode == InputMode.BROWSER:
-        raise typer.BadParameter("Browser mode does not resolve SQL.")
 
     raise typer.BadParameter(f"Unknown mode: {request.mode}")
 
