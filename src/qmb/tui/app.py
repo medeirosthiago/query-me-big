@@ -1213,27 +1213,33 @@ class QueryResultApp(App):
         inp = self.query_one("#history-filter", Input)
         inp.value = ""
         picker.display = True
-        self._populate_history_list("")
         inp.focus()
+        self.call_after_refresh(self._populate_history_list, "")
 
     def _populate_history_list(self, query: str) -> None:
         opt = self.query_one("#history-list", OptionList)
         opt.clear_options()
         self._filtered_history.clear()
         q = query.strip().lower()
+        avail = (opt.size.width or self.size.width) - 6  # border/padding/scrollbar
         for i, entry in enumerate(self._history_entries):
             date_str = f"{entry.created:%Y-%m-%d %H:%M}"
-            if q and q not in entry.query.lower() and q not in entry.job_id.lower() and q not in date_str:
+            if q and not any(q in s for s in (entry.query.lower(), entry.job_id.lower(), date_str)):
                 continue
-            label = (
-                f"{date_str} · "
-                f"{fmt_bytes(entry.bytes_processed)} · "
-                f"{entry.preview}"
-            )
-            opt.add_option(label)
+            prefix = f"{date_str} · {fmt_bytes(entry.bytes_processed)} · "
+            remaining = max(avail - len(prefix), 20)
+            sql_line = " ".join(entry.query.split())
+            if len(sql_line) > remaining:
+                sql_line = sql_line[: remaining - 3] + "..."
+            opt.add_option(f"{prefix}{sql_line}")
             self._filtered_history.append(i)
         if self._filtered_history:
             opt.highlighted = 0
+
+    def on_resize(self) -> None:
+        if self.query_one("#history-picker", Vertical).display:
+            inp = self.query_one("#history-filter", Input)
+            self._populate_history_list(inp.value)
 
     @on(Input.Changed, "#history-filter")
     def _on_history_filter_changed(self, event: Input.Changed) -> None:
