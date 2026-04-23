@@ -9,6 +9,12 @@ from qmb.sql.loader import normalize_sql
 from qmb.types import ResolvedQuery
 
 # Patterns for ref(), source(), var()
+# Two-arg ref: {{ ref('package', 'model') }}
+REF_TWO_ARG_PATTERN = re.compile(
+    r"\{\{\s*ref\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}",
+    re.IGNORECASE,
+)
+# Single-arg ref: {{ ref('model') }}
 REF_PATTERN = re.compile(
     r"\{\{\s*ref\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}",
     re.IGNORECASE,
@@ -94,7 +100,10 @@ def resolve_file_sql(
     variables = variables or {}
     sql = raw_sql
 
-    # Resolve ref()
+    # Resolve two-arg ref() first (more specific)
+    sql = REF_TWO_ARG_PATTERN.sub(lambda m: _resolve_ref(m.group(2), index), sql)
+
+    # Resolve single-arg ref()
     sql = REF_PATTERN.sub(lambda m: _resolve_ref(m.group(1), index), sql)
 
     # Resolve source()

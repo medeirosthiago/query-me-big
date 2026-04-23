@@ -1,7 +1,12 @@
 import pytest
 
 from qmb.dbt.manifest import ManifestIndex, ManifestNode
-from qmb.dbt.resolver import _parse_default, _to_sql_literal, resolve_model_query
+from qmb.dbt.resolver import (
+    _parse_default,
+    _to_sql_literal,
+    resolve_file_sql,
+    resolve_model_query,
+)
 
 
 def test_string_literals_are_sql_escaped() -> None:
@@ -43,6 +48,28 @@ def test_model_var_overrides_use_raw_sql_resolution() -> None:
     resolved = resolve_model_query("report", index, {"limit": 25})
 
     assert resolved.sql == "select 25 as limit_value from `proj`.`analytics`.`orders`"
+
+
+def test_two_arg_ref_resolves_by_model_name() -> None:
+    customers = ManifestNode(
+        unique_id="model.jaffle_shop.customers",
+        name="customers",
+        resource_type="model",
+        package_name="jaffle_shop",
+        database="proj",
+        schema_name="analytics",
+        alias="customers",
+        compiled_code=None,
+        raw_code=None,
+        original_file_path="models/customers.sql",
+    )
+    index = ManifestIndex(nodes_by_id={customers.unique_id: customers})
+
+    resolved = resolve_file_sql(
+        "select * from {{ ref('jaffle_shop', 'customers') }}",
+        index,
+    )
+    assert resolved.sql == "select * from `proj`.`analytics`.`customers`"
 
 
 def test_model_var_overrides_fail_on_unsupported_jinja() -> None:
