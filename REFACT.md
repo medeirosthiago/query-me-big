@@ -33,7 +33,7 @@ Lowest risk, highest clarity-per-effort.
 - [x] Make top-level `qmb --help` discoverable
   - Currently shows `run` help due to `_DefaultRunGroup`
   - Decide: keep fallback to `run` but make `qmb --help` show all commands
-- [ ] Remove unused `InputMode.BROWSER`
+- [x] Remove unused `InputMode.BROWSER`
   - Confirm no usage
   - Remove from `src/qmb/types.py`
 - [ ] Audit other dead/leftover symbols
