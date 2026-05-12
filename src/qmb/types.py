@@ -83,6 +83,22 @@ class TableRef:
         return not (self.project or self.dataset or self.table)
 
 
+@dataclass(frozen=True)
+class SchemaField:
+    """A single column in a query result schema."""
+
+    name: str
+    type: str
+    mode: str = "NULLABLE"
+
+    @classmethod
+    def from_mapping(cls, d: dict[str, Any]) -> "SchemaField":
+        return cls(name=d["name"], type=d["type"], mode=d.get("mode", "NULLABLE"))
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"name": self.name, "type": self.type, "mode": self.mode}
+
+
 @dataclass
 class QueryResultHandle:
     job_id: str
@@ -98,6 +114,11 @@ class QueryResultHandle:
     def destination(self) -> TableRef:
         """Typed view over :attr:`destination_table`."""
         return TableRef.parse(self.destination_table)
+
+    @property
+    def schema_fields(self) -> list[SchemaField]:
+        """Typed view over :attr:`schema`."""
+        return [SchemaField.from_mapping(d) for d in self.schema]
 
 
 @dataclass
