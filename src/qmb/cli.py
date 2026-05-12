@@ -15,7 +15,8 @@ from typer.core import TyperGroup
 from qmb.types import fmt_bytes
 
 if TYPE_CHECKING:
-    from qmb.types import QueryRequest, ResolvedQuery
+    from qmb.application.outcomes import ExecutionOutcome
+    from qmb.types import QueryRequest
 
 
 class _DefaultRunGroup(TyperGroup):
@@ -318,14 +319,14 @@ def browse(
 
 
 def _execute(request: QueryRequest) -> None:
-    """Core execution pipeline: run the app pipeline, then print + open TUI."""
+    """Run the application pipeline, render status, and optionally open the TUI."""
     from qmb.application.pipeline import run_query_pipeline
 
     outcome = run_query_pipeline(request)
     _render_outcome(outcome, request)
 
 
-def _render_outcome(outcome: Any, request: QueryRequest) -> None:
+def _render_outcome(outcome: ExecutionOutcome, request: QueryRequest) -> None:
     """Print console messages for an :class:`ExecutionOutcome` and launch TUI."""
     resolved = outcome.resolved
     handle = outcome.handle
@@ -380,22 +381,6 @@ def _render_outcome(outcome: Any, request: QueryRequest) -> None:
         page_size=request.page_size,
     )
     tui.run()
-
-
-def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
-    """Resolve the SQL from the request and emit dim status messages."""
-    from qmb.application.resolver import resolve_request_to_sql
-
-    resolved, trace = resolve_request_to_sql(request)
-    if trace.matched_node_id:
-        if trace.matched_via_raw_code:
-            console.print(
-                f"[dim]Matched {trace.matched_node_id} (no compiled_code, "
-                "resolving from raw SQL)[/dim]"
-            )
-        else:
-            console.print(f"[dim]Matched manifest node: {trace.matched_node_id}[/dim]")
-    return resolved
 
 
 if __name__ == "__main__":
