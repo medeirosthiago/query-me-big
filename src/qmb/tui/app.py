@@ -16,13 +16,11 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.events import Key
-from textual.screen import Screen
 from textual.widgets import (
     DataTable,
     Input,
     Label,
     OptionList,
-    Static,
     Tree,
 )
 
@@ -43,6 +41,7 @@ from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.integrations import clipboard
 from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
+from qmb.tui.help_screen import HelpScreen
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
@@ -54,77 +53,6 @@ _EXPORT_OPTIONS: list[tuple[ExportFormat, str, str]] = [
     (ExportFormat.JSON, "JSON (.json)", ".json"),
     (ExportFormat.PARQUET, "Parquet (.parquet)", ".parquet"),
 ]
-
-
-HELP_TEXT = """\
-qmb — Keyboard Shortcuts
-========================================
-
-Navigation
-  h/j/k/l       Move left/down/up/right
-  Arrow keys    Move left/down/up/right
-  gg            Go to first row
-  G             Go to last row
-  0             Go to first column
-  $             Go to last column
-  n             Next page (or next match)
-  N             Previous match
-  p             Previous page
-  Home          First page
-  End           Last page
-
-Search
-  /             Search cell values
-  f             Search column name
-  n/N           Next/previous match
-  Escape        Clear search
-
-Browser
-  b             Toggle dataset browser
-  /             Search datasets and tables
-  Enter / d     Open dataset or table details in nvim
-  h/l           Collapse/expand selected dataset
-  gg / G        First/last browser item
-  Escape        Close browser (or exit browser search)
-
-Yank (copy)
-  yw            Copy selected cell value
-  yc            Copy selected row as CSV
-  yj            Copy selected row as JSON
-
-Inspect
-  e             Open cell in nvim (read-only)
-  s             Open full SQL query in nvim
-  d             Open job details in nvim
-
-Export
-  x             Open export picker
-  xc            Quick export to CSV
-  xj            Quick export to JSON
-
-History
-  r             Browse recent query history
-
-Other
-  ?             Show this help
-  Ctrl-Q        Quit
-"""
-
-
-class HelpScreen(Screen):
-    """Simple scrollable help screen."""
-
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back", show=False),
-
-    ]
-    DEFAULT_CSS = """
-    HelpScreen { padding: 1 2; }
-    HelpScreen Static { width: 1fr; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Static(HELP_TEXT)
 
 
 # ---------------------------------------------------------------------------
