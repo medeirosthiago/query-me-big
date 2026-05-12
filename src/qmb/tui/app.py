@@ -279,9 +279,6 @@ class QueryResultApp(App):
     def _close_browser_search(self) -> None:
         self._browser.close_search()
 
-    def _render_browser(self) -> None:
-        self._browser.render()
-
     def _select_browser_dataset(self, dataset_id: str) -> None:
         self._browser.select_dataset(dataset_id)
 
@@ -290,12 +287,6 @@ class QueryResultApp(App):
 
     def _move_browser_cursor_last(self) -> None:
         self._browser.move_cursor_last()
-
-    def _handle_browser_key(self, event: Key) -> bool:
-        return self._browser.handle_key(event)
-
-    def _browser_focus_active(self) -> bool:
-        return self._browser.focus_active()
 
     @work(thread=True)
     def _load_browser_datasets(self) -> None:
@@ -343,10 +334,10 @@ class QueryResultApp(App):
             event.stop()
 
     def on_key(self, event: Key) -> None:
-        if self._handle_browser_key(event):
+        if self._browser.handle_key(event):
             return
 
-        if self._browser_focus_active() and getattr(self.focused, "id", None) == "browser-search":
+        if self._browser.focus_active() and getattr(self.focused, "id", None) == "browser-search":
             return
 
         # When a picker is focused, handle escape and arrow navigation
