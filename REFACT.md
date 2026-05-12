@@ -102,14 +102,14 @@ application functions/services.
 
 `src/qmb/bigquery/browser.py` currently mixes too many concerns.
 
-- [ ] Split `browser.py` into focused modules
+- [x] Split `browser.py` into focused modules
   - `bigquery/catalog.py` — `list_dataset_ids`, `list_dataset_tables`,
     `build_table_index`, `get_dataset_metadata`, `get_table_metadata`
   - `bigquery/catalog_search.py` — fuzzy/glob filtering + `BrowserMatch`
   - `bigquery/catalog_format.py` — `format_dataset_details`, `format_table_details`,
     helpers like `_format_bytes`, `_format_partitioning`, etc.
-- [ ] Re-export public names from `bigquery/__init__.py` (or keep import paths) to avoid breaking callers
-- [ ] Make `_raw_property` / `_value_or_raw` access live only in the format module
+- [x] Re-export public names from `bigquery/__init__.py` (or keep import paths) to avoid breaking callers
+- [x] Make `_raw_property` / `_value_or_raw` access live only in the format module
   - Keeps SDK-internal coupling in one place
 
 ---
