@@ -55,6 +55,34 @@ class ResolvedQuery:
     source_label: str  # e.g. "ad-hoc", "file: x.sql", "model: orders"
 
 
+@dataclass(frozen=True)
+class TableRef:
+    """A fully-qualified BigQuery table reference."""
+
+    project: str
+    dataset: str
+    table: str
+
+    @classmethod
+    def parse(cls, s: str) -> "TableRef":
+        """Parse ``'project.dataset.table'`` (or empty string → empty ref)."""
+        if not s:
+            return cls("", "", "")
+        parts = s.split(".")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid table reference: {s!r}")
+        return cls(*parts)
+
+    def __str__(self) -> str:
+        if not (self.project or self.dataset or self.table):
+            return ""
+        return f"{self.project}.{self.dataset}.{self.table}"
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.project or self.dataset or self.table)
+
+
 @dataclass
 class QueryResultHandle:
     job_id: str
@@ -65,6 +93,11 @@ class QueryResultHandle:
     total_rows: int
     bytes_processed: int = 0
     execution_seconds: float = 0.0
+
+    @property
+    def destination(self) -> TableRef:
+        """Typed view over :attr:`destination_table`."""
+        return TableRef.parse(self.destination_table)
 
 
 @dataclass

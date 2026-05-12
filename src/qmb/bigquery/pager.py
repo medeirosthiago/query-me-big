@@ -121,8 +121,8 @@ def _truncate(s: str, max_len: int = MAX_DISPLAY_WIDTH) -> str:
 
 
 def _table_ref_from_handle(handle: QueryResultHandle) -> bigquery.TableReference:
-    dest_parts = handle.destination_table.split(".")
+    ref = handle.destination
     return bigquery.TableReference(
-        bigquery.DatasetReference(dest_parts[0], dest_parts[1]),
-        dest_parts[2],
+        bigquery.DatasetReference(ref.project, ref.dataset),
+        ref.table,
     )
