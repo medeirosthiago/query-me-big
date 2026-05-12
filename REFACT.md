@@ -139,7 +139,7 @@ These live inside the TUI today but are clearly side concerns.
 
 Biggest readability payoff. Do this only after Phases 1–5.
 
-- [ ] Identify clear responsibility groups in `tui/app.py`
+- [x] Identify clear responsibility groups in `tui/app.py`
   - Result table + paging
   - Cell search
   - Column picker
@@ -147,19 +147,31 @@ Biggest readability payoff. Do this only after Phases 1–5.
   - History picker
   - Browser pane
   - Key sequence handling (pending-key state machine)
-- [ ] Extract per-feature controllers/components
-  - e.g. `tui/result_view.py`, `tui/browser_pane.py`,
-    `tui/export_picker.py`, `tui/history_picker.py`,
-    `tui/key_router.py`
-- [ ] Keep `QueryResultApp` as a thin coordinator
+- [x] Extract per-feature controllers/components
+  - `tui/help_screen.py` — `HelpScreen` + `HELP_TEXT`
+  - `tui/key_router.py` — `PendingKeyRouter`
+  - `tui/export_picker.py` — `ExportController`
+  - `tui/history_picker.py` — `HistoryController`
+  - `tui/browser_pane.py` — `BrowserController`
+  - `tui/search.py` — `CellSearchController` + `ColumnPickerController`
+- [x] Keep `QueryResultApp` as a thin coordinator
   - Compose components
-  - Wire events between them
-  - Hold only top-level app state
-- [ ] Move pending-key logic into a dedicated key router
+  - Wire events between them via one-line `@on(...)` delegators
+  - Hold only top-level app state (result rows / columns / current page)
+  - `app.py` slimmed from 1348 → ~775 lines
+- [x] Move pending-key logic into a dedicated key router
   - `y`, `x`, `g`, `gg`, etc.
-- [ ] Move browser async loading flow out of the App class
-  - Background workers should not be App methods
-- [ ] Ensure all extracted components have unit tests where reasonable
+- [x] Move browser async loading flow out of the App class
+  - The `@work(thread=True)` wrappers stay on the App (Textual requires
+    workers to be App methods), but they delegate post-fetch handling to
+    `BrowserController` callbacks (`on_datasets_loaded`,
+    `on_datasets_failed`, `on_index_loaded`, `on_index_failed`,
+    `on_dataset_tables_loaded`, `on_dataset_tables_failed`).
+- [x] Ensure all extracted components have unit tests where reasonable
+  - Added `tests/test_tui_key_router.py`
+  - Existing `tests/test_tui_app.py` integration tests exercise every
+    controller through the App's public surface (browser, history,
+    export pickers).
 
 ---
 
