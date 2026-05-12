@@ -445,8 +445,10 @@ def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
         return resolved
 
     if request.mode == InputMode.MODEL:
-        assert request.manifest_path is not None
-        assert request.model_name is not None
+        if request.manifest_path is None:
+            raise ValueError("InputMode.MODEL requires request.manifest_path to be set")
+        if request.model_name is None:
+            raise ValueError("InputMode.MODEL requires request.model_name to be set")
 
         from qmb.dbt.manifest import load_manifest
         from qmb.dbt.resolver import resolve_model_query
