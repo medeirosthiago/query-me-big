@@ -304,6 +304,17 @@ class QueryResultApp(App):
                 PageResult(rows=[], display_rows=[], page=0, total_pages=1, total_rows=0)
             )
 
+    # -- notify helpers -----------------------------------------------------
+
+    def _info(self, msg: str) -> None:
+        self.notify(msg, severity="information")
+
+    def _warn(self, msg: str) -> None:
+        self.notify(msg, severity="warning")
+
+    def _error(self, msg: str) -> None:
+        self.notify(msg, severity="error")
+
     @on(DataTable.CellHighlighted)
     def _enforce_min_column(self, event: DataTable.CellHighlighted) -> None:
         if self._column_names and event.coordinate.column == 0:
@@ -405,7 +416,7 @@ class QueryResultApp(App):
     def _on_browser_datasets_failed(self, error: str) -> None:
         self._browser_loading_datasets = False
         self._render_browser()
-        self.notify(f"Browser load failed: {error}", severity="error")
+        self._error(f"Browser load failed: {error}")
 
     def _ensure_browser_index(self) -> None:
         if (
@@ -436,7 +447,7 @@ class QueryResultApp(App):
     def _on_browser_index_failed(self, error: str) -> None:
         self._browser_loading_index = False
         self._render_browser()
-        self.notify(f"Table index failed: {error}", severity="error")
+        self._error(f"Table index failed: {error}")
 
     def _ensure_browser_dataset_tables(self, dataset_id: str) -> None:
         if (
@@ -468,7 +479,7 @@ class QueryResultApp(App):
     def _on_browser_dataset_tables_failed(self, dataset_id: str, error: str) -> None:
         self._browser_loading_tables.discard(dataset_id)
         self._render_browser()
-        self.notify(f"Dataset browser failed for {dataset_id}: {error}", severity="error")
+        self._error(f"Dataset browser failed for {dataset_id}: {error}")
 
     def _browser_matches(self) -> list[BrowserMatch]:
         if self._browser_query.strip():
@@ -589,7 +600,7 @@ class QueryResultApp(App):
     def _open_browser_details(self) -> None:
         node = self.query_one("#browser-tree", Tree).cursor_node
         if node is None or not node.data:
-            self.notify("No browser item selected", severity="warning")
+            self._warn("No browser item selected")
             return
 
         try:
@@ -608,7 +619,7 @@ class QueryResultApp(App):
                 self._open_in_editor(details, suffix=".txt", prefix=f"qmb_table_{table_id}_")
                 return
         except Exception as exc:
-            self.notify(f"Browser details failed: {exc}", severity="error")
+            self._error(f"Browser details failed: {exc}")
 
     def _move_browser_cursor_first(self) -> None:
         tree = self.query_one("#browser-tree", Tree)
@@ -728,7 +739,7 @@ class QueryResultApp(App):
         if event.key == "escape" and self._cell_matches:
             self._cell_matches.clear()
             self._match_idx = -1
-            self.notify("Search cleared")
+            self._info("Search cleared")
             event.prevent_default()
             event.stop()
             return
@@ -883,11 +894,11 @@ class QueryResultApp(App):
 
         if matches:
             self._goto_match(1)
-            self.notify(
+            self._info(
                 f"{len(matches)} match{'es' if len(matches) != 1 else ''} · n/N to cycle"
             )
         else:
-            self.notify("No matches found", severity="warning")
+            self._warn("No matches found")
 
     @on(Input.Changed, "#browser-search")
     def _on_browser_search_changed(self, event: Input.Changed) -> None:
@@ -954,7 +965,7 @@ class QueryResultApp(App):
         self._dismiss_picker()
         table = self.query_one("#result-table", DataTable)
         table.move_cursor(column=col_idx + 1)
-        self.notify(f"→ {self._column_names[col_idx]}")
+        self._info(f"→ {self._column_names[col_idx]}")
 
     def _goto_match(self, direction: int) -> None:
         if not self._cell_matches:
@@ -973,7 +984,7 @@ class QueryResultApp(App):
     def _copy_cell(self) -> None:
         table = self.query_one("#result-table", DataTable)
         if not self._raw_rows or not self._column_names:
-            self.notify("No data to copy", severity="warning")
+            self._warn("No data to copy")
             return
 
         row_idx = table.cursor_coordinate.row
@@ -989,14 +1000,14 @@ class QueryResultApp(App):
 
         try:
             pyperclip.copy(full_text)
-            self.notify(f"Copied {col_name} value", severity="information")
+            self._info(f"Copied {col_name} value")
         except pyperclip.PyperclipException:
-            self.notify("Clipboard not available", severity="error")
+            self._error("Clipboard not available")
 
     def _copy_row_json(self) -> None:
         table = self.query_one("#result-table", DataTable)
         if not self._raw_rows:
-            self.notify("No data to copy", severity="warning")
+            self._warn("No data to copy")
             return
 
         row_idx = table.cursor_coordinate.row
@@ -1007,14 +1018,14 @@ class QueryResultApp(App):
 
         try:
             pyperclip.copy(json.dumps(raw_row, indent=2, default=json_default))
-            self.notify("Copied row as JSON", severity="information")
+            self._info("Copied row as JSON")
         except pyperclip.PyperclipException:
-            self.notify("Clipboard not available", severity="error")
+            self._error("Clipboard not available")
 
     def _copy_row_csv(self) -> None:
         table = self.query_one("#result-table", DataTable)
         if not self._raw_rows or not self._column_names:
-            self.notify("No data to copy", severity="warning")
+            self._warn("No data to copy")
             return
 
         row_idx = table.cursor_coordinate.row
@@ -1029,16 +1040,16 @@ class QueryResultApp(App):
 
         try:
             pyperclip.copy(buf.getvalue())
-            self.notify("Copied row as CSV", severity="information")
+            self._info("Copied row as CSV")
         except pyperclip.PyperclipException:
-            self.notify("Clipboard not available", severity="error")
+            self._error("Clipboard not available")
 
     # -- vim cell / query ---------------------------------------------------
 
     def action_vim_cell(self) -> None:
         table = self.query_one("#result-table", DataTable)
         if not self._raw_rows or not self._column_names:
-            self.notify("No data to inspect", severity="warning")
+            self._warn("No data to inspect")
             return
 
         row_idx = table.cursor_coordinate.row
@@ -1140,9 +1151,9 @@ class QueryResultApp(App):
         self._dismiss_picker()
         try:
             count = export_results(self.bq_client, self.handle, export_format, path)
-            self.notify(f"Exported {count:,} rows to {path}", severity="information")
+            self._info(f"Exported {count:,} rows to {path}")
         except Exception as exc:
-            self.notify(f"Export failed: {exc}", severity="error")
+            self._error(f"Export failed: {exc}")
 
     @on(OptionList.OptionSelected, "#export-list")
     def _on_export_selected(self, event: OptionList.OptionSelected) -> None:
@@ -1169,9 +1180,9 @@ class QueryResultApp(App):
         path = Path(f"{ts}{ext}")
         try:
             count = export_results(self.bq_client, self.handle, fmt, path)
-            self.notify(f"Exported {count:,} rows to {path}", severity="information")
+            self._info(f"Exported {count:,} rows to {path}")
         except Exception as e:
-            self.notify(f"Export failed: {e}", severity="error")
+            self._error(f"Export failed: {e}")
 
     # -- history picker -----------------------------------------------------
 
@@ -1182,7 +1193,7 @@ class QueryResultApp(App):
         if self._history_loading:
             return
         self._history_loading = True
-        self.notify("Loading query history…")
+        self._info("Loading query history…")
         self._fetch_history()
 
     @work(thread=True)
@@ -1200,13 +1211,13 @@ class QueryResultApp(App):
         self._history_loading = False
         self._history_entries = entries
         if not entries:
-            self.notify("No recent queries found", severity="warning")
+            self._warn("No recent queries found")
             return
         self._open_history_picker()
 
     def _on_history_failed(self, error: str) -> None:
         self._history_loading = False
-        self.notify(f"History load failed: {error}", severity="error")
+        self._error(f"History load failed: {error}")
 
     def _open_history_picker(self) -> None:
         picker = self.query_one("#history-picker", Vertical)
