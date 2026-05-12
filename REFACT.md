@@ -51,22 +51,28 @@ Lowest risk, highest clarity-per-effort.
 
 Still low risk, mostly local changes.
 
-- [ ] Replace runtime `assert` used for control flow with explicit errors
+- [x] Replace runtime `assert` used for control flow with explicit errors
   - `src/qmb/sql/loader.py` (`request.sql is not None`, `request.file_path is not None`)
   - `src/qmb/cli.py` (`request.manifest_path is not None`, `request.model_name is not None`)
   - Use `ValueError` or `typer.BadParameter` depending on layer
-- [ ] Remove unnecessary `from __future__ import annotations`
+- [x] Remove unnecessary `from __future__ import annotations`
   - Keep it only where it is actually required (e.g. `cli.py` with `TYPE_CHECKING` imports)
   - Drop from `src/qmb/bigquery/history.py` if not needed
-- [ ] Standardize error notification helpers in the TUI
+- [x] Standardize error notification helpers in the TUI
   - Centralize the `self.notify(..., severity=...)` patterns
-- [ ] Tighten a few `Any` usages where the real type is known
-  - Schema field dicts
-  - Row dicts (where reasonable)
-- [ ] Add a couple of characterization tests before deeper refactors
+  - Added `_info` / `_warn` / `_error` wrappers on `QueryResultApp`
+- [x] Tighten a few `Any` usages where the real type is known
+  - Skipped: no low-hanging fruit. The remaining `Any` usages are either
+    truly polymorphic (`_coerce_var_value` return, `json_default`,
+    `QueryRequest.variables`, BigQuery SDK resource attrs in
+    `catalog_format`) or part of the schema/row dict shape that Phase 7
+    will replace with proper domain types. No type narrowing added here.
+- [x] Add a couple of characterization tests before deeper refactors
   - CLI flow: query → resolve → execute → export
   - CLI flow: model → resolve → execute → export
   - CLI flow: file → resolve_dbt auto-detect
+  - See `tests/test_cli_flow.py` (10 tests covering ad-hoc / file / dbt /
+    model / `--where` / `--dry-run` / `--export` / `--max-bytes-billed`)
 
 ---
 
