@@ -41,6 +41,7 @@ from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
 from qmb.tui.export_picker import ExportController
 from qmb.tui.help_screen import HelpScreen
+from qmb.tui.history_picker import HistoryController
 from qmb.tui.key_router import PendingKeyRouter
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
@@ -165,9 +166,7 @@ class QueryResultApp(App):
         self._browser_index_ready = False
         self._browser_rendering = False
         self._browser_pending_key: str | None = None
-        self._history_entries: list[QueryHistoryEntry] = history_entries or []
-        self._filtered_history: list[int] = []
-        self._history_loading = False
+        self._history = HistoryController(self, history_entries)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="app-layout"):
@@ -200,7 +199,7 @@ class QueryResultApp(App):
         browser_tree.root.expand()
         self._close_browser_search()
         self._render_browser()
-        if self._history_entries:
+        if self._history.entries:
             self._open_history_picker()
             return
         if self.start_in_browser:
@@ -1015,14 +1014,13 @@ class QueryResultApp(App):
     # -- history picker -----------------------------------------------------
 
     def _load_and_open_history(self) -> None:
-        if self._history_entries:
-            self._open_history_picker()
-            return
-        if self._history_loading:
-            return
-        self._history_loading = True
-        self._info("Loading query history…")
-        self._fetch_history()
+        self._history.load_and_open()
+
+    def _open_history_picker(self) -> None:
+        self._history.open()
+
+    def _select_history_entry(self, option_idx: int) -> None:
+        self._history.select(option_idx)
 
     @work(thread=True)
     def _fetch_history(self) -> None:
@@ -1031,78 +1029,24 @@ class QueryResultApp(App):
         try:
             entries = list_recent_queries(self.bq_client, days=7, limit=200)
         except Exception as exc:
-            self.call_from_thread(self._on_history_failed, str(exc))
+            self.call_from_thread(self._history.on_load_failed, str(exc))
             return
-        self.call_from_thread(self._on_history_loaded, entries)
-
-    def _on_history_loaded(self, entries: list[QueryHistoryEntry]) -> None:
-        self._history_loading = False
-        self._history_entries = entries
-        if not entries:
-            self._warn("No recent queries found")
-            return
-        self._open_history_picker()
-
-    def _on_history_failed(self, error: str) -> None:
-        self._history_loading = False
-        self._error(f"History load failed: {error}")
-
-    def _open_history_picker(self) -> None:
-        picker = self.query_one("#history-picker", Vertical)
-        inp = self.query_one("#history-filter", Input)
-        inp.value = ""
-        picker.display = True
-        inp.focus()
-        self.call_after_refresh(self._populate_history_list, "")
-
-    def _populate_history_list(self, query: str) -> None:
-        opt = self.query_one("#history-list", OptionList)
-        opt.clear_options()
-        self._filtered_history.clear()
-        q = query.strip().lower()
-        avail = (opt.size.width or self.size.width) - 6  # border/padding/scrollbar
-        for i, entry in enumerate(self._history_entries):
-            date_str = f"{entry.created:%Y-%m-%d %H:%M}"
-            if q and not any(q in s for s in (entry.query.lower(), entry.job_id.lower(), date_str)):
-                continue
-            prefix = f"{date_str} · {fmt_bytes(entry.bytes_processed)} · "
-            remaining = max(avail - len(prefix), 20)
-            sql_line = " ".join(entry.query.split())
-            if len(sql_line) > remaining:
-                sql_line = sql_line[: remaining - 3] + "..."
-            opt.add_option(f"{prefix}{sql_line}")
-            self._filtered_history.append(i)
-        if self._filtered_history:
-            opt.highlighted = 0
+        self.call_from_thread(self._history.on_load_succeeded, entries)
 
     def on_resize(self) -> None:
-        if self.query_one("#history-picker", Vertical).display:
-            inp = self.query_one("#history-filter", Input)
-            self._populate_history_list(inp.value)
+        self._history.on_resize()
 
     @on(Input.Changed, "#history-filter")
     def _on_history_filter_changed(self, event: Input.Changed) -> None:
-        self._populate_history_list(event.value)
+        self._history.on_filter_changed(event.value)
 
     @on(Input.Submitted, "#history-filter")
     def _on_history_filter_submitted(self, event: Input.Submitted) -> None:
-        opt = self.query_one("#history-list", OptionList)
-        if self._filtered_history and opt.highlighted is not None:
-            self._select_history_entry(opt.highlighted)
+        self._history.on_filter_submitted()
 
     @on(OptionList.OptionSelected, "#history-list")
     def _on_history_selected(self, event: OptionList.OptionSelected) -> None:
-        self._select_history_entry(event.option_index)
-
-    def _select_history_entry(self, option_idx: int) -> None:
-        if option_idx < 0 or option_idx >= len(self._filtered_history):
-            return
-        entry = self._history_entries[self._filtered_history[option_idx]]
-        self._dismiss_picker()
-        self._open_in_editor(
-            entry.query, suffix=".sql", prefix="qmb_history_", read_only=False
-        )
-        self._open_history_picker()
+        self._history.on_option_selected(event.option_index)
 
     # -- job details --------------------------------------------------------
 
