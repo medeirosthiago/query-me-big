@@ -321,8 +321,15 @@ def browse(
 def _execute(request: QueryRequest) -> None:
     """Run the application pipeline, render status, and optionally open the TUI."""
     from qmb.application.pipeline import run_query_pipeline
+    from qmb.dbt.integration import DbtSqlResolver
+    from qmb.sql.resolver import PlainSqlResolver
 
-    outcome = run_query_pipeline(request)
+    # The CLI is the composition root: it decides which resolvers exist
+    # and in what order. Order matters — the first resolver whose
+    # ``can_resolve`` returns True wins.
+    resolvers = [DbtSqlResolver(), PlainSqlResolver()]
+
+    outcome = run_query_pipeline(request, resolvers=resolvers)
     _render_outcome(outcome, request)
 
 

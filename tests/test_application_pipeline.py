@@ -17,14 +17,23 @@ from qmb.application.resolver import (
     apply_where,
     resolve_request_to_sql,
 )
+from qmb.dbt.integration import DbtSqlResolver
 from qmb.dbt.manifest import ManifestIndex, ManifestNode
+from qmb.sql.resolver import PlainSqlResolver
 from qmb.types import InputMode, QueryRequest, ResolvedQuery
+
+# Default resolver list mirroring the CLI's wiring — dbt first, then plain.
+_DEFAULT_RESOLVERS = [DbtSqlResolver(), PlainSqlResolver()]
 
 
 def _request(**overrides: Any) -> QueryRequest:
     base: dict[str, Any] = {"mode": InputMode.SQL, "sql": "SELECT 1"}
     base.update(overrides)
     return QueryRequest(**base)
+
+
+def _resolve(request: QueryRequest) -> tuple[ResolvedQuery, ResolutionTrace]:
+    return resolve_request_to_sql(request, _DEFAULT_RESOLVERS)
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +66,7 @@ def test_apply_where_wraps_sql_in_subquery_and_preserves_label() -> None:
 
 def test_resolve_request_ad_hoc_returns_normalized_sql() -> None:
     request = _request(sql="SELECT 7;\n\n")
-    resolved, trace = resolve_request_to_sql(request)
+    resolved, trace = _resolve(request)
     assert resolved.sql == "SELECT 7"
     assert resolved.source_label == "ad-hoc"
     assert trace == ResolutionTrace()
@@ -68,7 +77,7 @@ def test_resolve_request_file_without_dbt_loads_file(tmp_path: Path) -> None:
     sql_path.write_text("SELECT 2;\n", encoding="utf-8")
     request = _request(mode=InputMode.FILE, sql=None, file_path=sql_path)
 
-    resolved, trace = resolve_request_to_sql(request)
+    resolved, trace = _resolve(request)
 
     assert resolved.sql == "SELECT 2"
     assert "file: q.sql" in resolved.source_label
@@ -106,7 +115,7 @@ def test_resolve_request_model_uses_manifest(
         variables={"k": "v"},
     )
 
-    resolved, trace = resolve_request_to_sql(request)
+    resolved, trace = _resolve(request)
 
     assert resolved.sql == "SELECT 42"
     assert resolved.source_label == "model: orders"
@@ -154,7 +163,7 @@ def test_resolve_request_file_with_dbt_match_returns_compiled_trace(
         manifest_path=manifest_path,
     )
 
-    resolved, trace = resolve_request_to_sql(request)
+    resolved, trace = _resolve(request)
 
     assert resolved.sql == "SELECT 1 AS compiled"
     assert resolved.source_label == "model: orders (model.proj.orders)"
@@ -198,7 +207,7 @@ def test_resolve_request_file_with_dbt_no_match_falls_back(
         manifest_path=manifest_path,
     )
 
-    resolved, trace = resolve_request_to_sql(request)
+    resolved, trace = _resolve(request)
 
     assert resolved.sql == "SELECT 999"
     assert "file: q.sql" in resolved.source_label
