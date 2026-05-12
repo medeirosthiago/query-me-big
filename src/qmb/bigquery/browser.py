@@ -1,4 +1,11 @@
-"""Helpers for browsing BigQuery datasets and tables."""
+"""Backwards-compatible facade for the catalog browser modules.
+
+New code should import directly from the focused modules:
+
+- :mod:`qmb.bigquery.catalog` — metadata listing/fetching
+- :mod:`qmb.bigquery.catalog_search` — fuzzy/glob filtering and ``BrowserMatch``
+- :mod:`qmb.bigquery.catalog_format` — details formatting for editor display
+"""
 
 from qmb.bigquery.catalog import (
     build_table_index,
