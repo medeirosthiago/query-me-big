@@ -26,7 +26,7 @@ Lowest risk, highest clarity-per-effort.
   - README documents `qmb --browser-only` / `qmb --browse`
   - Actual CLI exposes a `browse` subcommand
   - Decide on one shape (subcommand) and align docs + examples + options table
-- [ ] Document the `history` feature consistently
+- [x] Document the `history` feature consistently
   - Add to README CLI section
   - Add to TUI keyboard shortcuts table (`r` to open history)
   - Mention in Quick Examples

@@ -75,6 +75,16 @@ qmb browse --project my-project
 qmb browse --project my-project --location US
 ```
 
+### Query history
+
+```bash
+# browse the last 7 days of query history in the TUI
+qmb history
+
+# look back further and cap the number of jobs fetched
+qmb history --days 30 --limit 500 --project my-project --location US
+```
+
 ## Usage
 
 ### Ad-hoc SQL
@@ -151,7 +161,29 @@ qmb browse --project my-project --location US
 
 In browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
 
+### Query history
+
+Browse recent BigQuery jobs (from the Jobs API) in the TUI:
+
+```bash
+qmb history
+qmb history --days 14 --limit 300
+qmb history --project my-project --location US
+```
+
+Inside the TUI, press `r` to open the history picker at any time. Selecting an entry opens the job's SQL in nvim (read-only).
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
+| `qmb browse` | Open the dataset/table browser without running a query |
+| `qmb history` | Browse recent BigQuery query history in the TUI |
+
 ## CLI Options
+
+Options below apply to `qmb run` (the default command). `qmb browse` accepts `--project` and `--location`. `qmb history` accepts `--days`, `--limit`, `--project`, `--location`, and `--page-size`.
 
 | Option | Short | Description |
 |---|---|---|
@@ -236,5 +268,6 @@ In browser-only mode, qmb opens straight into the left-side browser pane and use
 
 | Key | Action |
 |---|---|
+| `r` | Browse recent query history |
 | `?` | Show all shortcuts |
 | `Ctrl-Q` | Quit |
