@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pyperclip
 from google.cloud import bigquery
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -41,6 +40,8 @@ from qmb.bigquery.browser import (
 from qmb.bigquery.exporters import export_results
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
+from qmb.integrations import clipboard
+from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
@@ -997,10 +998,11 @@ class QueryResultApp(App):
         full_text = get_raw_value(raw_value)
 
         try:
-            pyperclip.copy(full_text)
-            self._info(f"Copied {col_name} value")
-        except pyperclip.PyperclipException:
+            clipboard.copy(full_text)
+        except ClipboardUnavailable:
             self._error("Clipboard not available")
+            return
+        self._info(f"Copied {col_name} value")
 
     def _copy_row_json(self) -> None:
         table = self.query_one("#result-table", DataTable)
@@ -1015,10 +1017,11 @@ class QueryResultApp(App):
         raw_row = self._raw_rows[row_idx]
 
         try:
-            pyperclip.copy(json.dumps(raw_row, indent=2, default=json_default))
-            self._info("Copied row as JSON")
-        except pyperclip.PyperclipException:
+            clipboard.copy(json.dumps(raw_row, indent=2, default=json_default))
+        except ClipboardUnavailable:
             self._error("Clipboard not available")
+            return
+        self._info("Copied row as JSON")
 
     def _copy_row_csv(self) -> None:
         table = self.query_one("#result-table", DataTable)
@@ -1037,10 +1040,11 @@ class QueryResultApp(App):
         writer.writerow({k: get_raw_value(v) for k, v in raw_row.items()})
 
         try:
-            pyperclip.copy(buf.getvalue())
-            self._info("Copied row as CSV")
-        except pyperclip.PyperclipException:
+            clipboard.copy(buf.getvalue())
+        except ClipboardUnavailable:
             self._error("Clipboard not available")
+            return
+        self._info("Copied row as CSV")
 
     # -- vim cell / query ---------------------------------------------------
 
