@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from qmb.application.resolver import ResolutionTrace
 from qmb.types import QueryResultHandle, ResolvedQuery
 
 __all__ = ["ExecutionOutcome"]
@@ -25,6 +26,7 @@ class ExecutionOutcome:
     resolved: ResolvedQuery
     handle: QueryResultHandle
     client: Any  # google.cloud.bigquery.Client; typed as Any to avoid the import
+    trace: ResolutionTrace = ResolutionTrace()
     exported_path: Path | None = None
     exported_rows: int | None = None
     dry_run: bool = False

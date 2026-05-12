@@ -318,51 +318,51 @@ def browse(
 
 
 def _execute(request: QueryRequest) -> None:
-    """Core execution pipeline."""
-    from qmb.bigquery.client import get_client
-    from qmb.bigquery.executor import execute_query
-    from qmb.bigquery.exporters import export_results
-    from qmb.tui.app import QueryResultApp
+    """Core execution pipeline: run the app pipeline, then print + open TUI."""
+    from qmb.application.pipeline import run_query_pipeline
 
-    client = get_client(request.project, request.location)
+    outcome = run_query_pipeline(request)
+    _render_outcome(outcome, request)
 
-    # Step 1: Resolve SQL
-    resolved = _resolve_sql(request)
 
-    # Step 1.5: Apply --where clause
-    from qmb.application.resolver import apply_where
+def _render_outcome(outcome: Any, request: QueryRequest) -> None:
+    """Print console messages for an :class:`ExecutionOutcome` and launch TUI."""
+    resolved = outcome.resolved
+    handle = outcome.handle
+    trace = outcome.trace
 
-    resolved = apply_where(resolved, request.where)
+    # Reproduce the dim manifest-match status messages.
+    if trace.matched_node_id:
+        if trace.matched_via_raw_code:
+            console.print(
+                f"[dim]Matched {trace.matched_node_id} (no compiled_code, "
+                "resolving from raw SQL)[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]Matched manifest node: {trace.matched_node_id}[/dim]"
+            )
 
-    # Step 2: Execute
-    if request.dry_run:
-        handle = execute_query(
-            client, resolved, dry_run=True, max_bytes_billed=request.max_bytes_billed
-        )
+    if outcome.dry_run:
         console.print(Panel(resolved.sql, title="Resolved SQL (dry run)", border_style="cyan"))
         console.print(f"[cyan]Estimated:[/cyan] {fmt_bytes(handle.bytes_processed)}")
         return
 
     console.print(f"[dim]Source: {resolved.source_label}[/dim]")
     console.print("[dim]Executing query...[/dim]")
-
-    handle = execute_query(client, resolved, max_bytes_billed=request.max_bytes_billed)
-
     console.print(
         f"[green]✓[/green] {handle.total_rows:,} rows · "
         f"{fmt_bytes(handle.bytes_processed)} processed · "
         f"Job: {handle.job_id}"
     )
 
-    # Step 3: Export if requested
-    if request.export_format and request.export_path:
-        console.print(f"[dim]Exporting to {request.export_path}...[/dim]")
-        count = export_results(client, handle, request.export_format, request.export_path)
+    if outcome.exported_path is not None:
+        console.print(f"[dim]Exporting to {outcome.exported_path}...[/dim]")
         console.print(
-            f"[green]✓[/green] Exported {count:,} rows to {request.export_path}"
+            f"[green]✓[/green] Exported {outcome.exported_rows:,} rows "
+            f"to {outcome.exported_path}"
         )
 
-    # Step 4: TUI or exit
     if request.no_tui:
         return
 
@@ -370,8 +370,10 @@ def _execute(request: QueryRequest) -> None:
         console.print("[yellow]No rows to display.[/yellow]")
         return
 
+    from qmb.tui.app import QueryResultApp
+
     tui = QueryResultApp(
-        bq_client=client,
+        bq_client=outcome.client,
         handle=handle,
         source_label=resolved.source_label,
         resolved_sql=resolved.sql,
