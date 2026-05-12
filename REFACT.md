@@ -213,13 +213,27 @@ Once orchestration and TUI are split, types are easier to evolve.
 
 Only after the application layer is explicit.
 
-- [ ] Define a `SqlResolver` protocol/interface in core
-  - `resolve(input_spec) -> ResolvedQuery`
-- [ ] Implement `PlainSqlResolver` (current SQL/file behavior without dbt)
-- [ ] Implement `DbtSqlResolver` (wraps current dbt logic)
-- [ ] CLI/application layer chooses resolver based on input + options
-- [ ] Core stops importing dbt directly
-- [ ] dbt module only depends on core abstractions, not the other way around
+- [x] Define a `SqlResolver` protocol/interface in core
+  - Added `qmb.application.protocols.SqlResolver` with `can_resolve` /
+    `resolve` returning `(ResolvedQuery, ResolutionTrace)`
+  - `ResolutionTrace` lives alongside the protocol
+- [x] Implement `PlainSqlResolver` (current SQL/file behavior without dbt)
+  - `qmb.sql.resolver.PlainSqlResolver` handles `InputMode.SQL` and
+    `InputMode.FILE` (when `resolve_dbt=False`)
+- [x] Implement `DbtSqlResolver` (wraps current dbt logic)
+  - `qmb.dbt.integration.DbtSqlResolver` handles `InputMode.MODEL` and
+    `InputMode.FILE` with `resolve_dbt=True`
+  - Preserves the existing trace fields used by the CLI dim messages
+- [x] CLI/application layer chooses resolver based on input + options
+  - `cli._execute` constructs `[DbtSqlResolver(), PlainSqlResolver()]`
+    and passes them to `run_query_pipeline`
+  - The pipeline forwards them to `resolve_request_to_sql`, which picks
+    the first resolver whose `can_resolve` returns `True`
+- [x] Core stops importing dbt directly
+  - `rg "from qmb.dbt|import qmb.dbt" src/qmb/application/` returns nothing
+- [x] dbt module only depends on core abstractions, not the other way around
+  - `qmb.dbt.integration` imports `qmb.application.protocols` for
+    `ResolutionTrace`; nothing in `qmb.application` imports `qmb.dbt`
 
 ---
 
