@@ -125,13 +125,13 @@ application functions/services.
 
 These live inside the TUI today but are clearly side concerns.
 
-- [ ] Move `_open_in_editor` into a small helper module
+- [x] Move `_open_in_editor` into a small helper module
   - e.g. `qmb/integrations/editor.py`
   - `open_in_editor(content, *, suffix, prefix, read_only=True)`
-- [ ] Move clipboard copy + error notification pattern into a helper
+- [x] Move clipboard copy + error notification pattern into a helper
   - e.g. `qmb/integrations/clipboard.py`
   - Provides `copy(text) -> bool` with a single failure path
-- [ ] Update `QueryResultApp` to call these helpers instead of inlining behavior
+- [x] Update `QueryResultApp` to call these helpers instead of inlining behavior
 
 ---
 
