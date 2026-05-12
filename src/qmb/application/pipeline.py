@@ -32,17 +32,20 @@ def run_query_pipeline(request: QueryRequest) -> ExecutionOutcome:
     Does no console I/O and does not launch the TUI. The caller is
     expected to render status from the returned :class:`ExecutionOutcome`.
     """
-    client = _bq_client.get_client(request.project, request.location)
+    execution = request.execution
+    output = request.output
+
+    client = _bq_client.get_client(execution.project, execution.location)
 
     resolved, trace = resolve_request_to_sql(request)
-    resolved = apply_where(resolved, request.where)
+    resolved = apply_where(resolved, execution.where)
 
-    if request.dry_run:
+    if execution.dry_run:
         handle = _bq_executor.execute_query(
             client,
             resolved,
             dry_run=True,
-            max_bytes_billed=request.max_bytes_billed,
+            max_bytes_billed=execution.max_bytes_billed,
         )
         return ExecutionOutcome(
             resolved=resolved,
@@ -55,16 +58,16 @@ def run_query_pipeline(request: QueryRequest) -> ExecutionOutcome:
     handle = _bq_executor.execute_query(
         client,
         resolved,
-        max_bytes_billed=request.max_bytes_billed,
+        max_bytes_billed=execution.max_bytes_billed,
     )
 
     exported_path = None
     exported_rows = None
-    if request.export_format and request.export_path:
+    if output.export_format and output.export_path:
         exported_rows = _bq_exporters.export_results(
-            client, handle, request.export_format, request.export_path
+            client, handle, output.export_format, output.export_path
         )
-        exported_path = request.export_path
+        exported_path = output.export_path
 
     return ExecutionOutcome(
         resolved=resolved,

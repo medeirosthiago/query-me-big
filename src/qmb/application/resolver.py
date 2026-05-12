@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from qmb.dbt import manifest as _dbt_manifest
 from qmb.dbt import resolver as _dbt_resolver
 from qmb.sql import loader as _sql_loader
-from qmb.types import InputMode, QueryRequest, ResolvedQuery
+from qmb.types import DbtOptions, InputMode, InputSpec, QueryRequest, ResolvedQuery
 
 __all__ = ["ResolutionTrace", "apply_where", "resolve_request_to_sql"]
 
@@ -41,26 +41,32 @@ def resolve_request_to_sql(
     user-facing status messages. This function does no I/O to the
     console — it is pure orchestration over the SQL/dbt modules.
     """
-    if request.mode == InputMode.SQL:
-        return _sql_loader.load_sql(request), ResolutionTrace()
+    return _resolve(request.input, request.dbt)
 
-    if request.mode == InputMode.FILE:
-        resolved = _sql_loader.load_sql(request)
 
-        if not request.resolve_dbt:
+def _resolve(
+    spec: InputSpec, dbt: DbtOptions
+) -> tuple[ResolvedQuery, ResolutionTrace]:
+    if spec.mode == InputMode.SQL:
+        return _sql_loader.load_sql(spec), ResolutionTrace()
+
+    if spec.mode == InputMode.FILE:
+        resolved = _sql_loader.load_sql(spec)
+
+        if not dbt.resolve_dbt:
             return resolved, ResolutionTrace()
 
-        if request.manifest_path is None:
+        if dbt.manifest_path is None:
             raise ValueError(
                 "InputMode.FILE with resolve_dbt=True requires "
-                "request.manifest_path to be set"
+                "manifest_path to be set"
             )
 
-        index = _dbt_manifest.load_manifest(request.manifest_path)
+        index = _dbt_manifest.load_manifest(dbt.manifest_path)
 
         # Try to match the file to a compiled manifest node first.
-        if request.file_path:
-            node = _dbt_resolver.resolve_file_to_model(str(request.file_path), index)
+        if spec.file_path:
+            node = _dbt_resolver.resolve_file_to_model(str(spec.file_path), index)
             if node:
                 if node.compiled_code:
                     return (
@@ -75,7 +81,7 @@ def resolve_request_to_sql(
                         _dbt_resolver.resolve_file_sql(
                             _dbt_resolver.strip_config_blocks(node.raw_code),
                             index,
-                            request.variables,
+                            dbt.variables,
                             source_label=f"model: {node.name} ({node.unique_id})",
                         ),
                         ResolutionTrace(
@@ -88,31 +94,31 @@ def resolve_request_to_sql(
             _dbt_resolver.resolve_file_sql(
                 resolved.sql,
                 index,
-                request.variables,
+                dbt.variables,
                 source_label=resolved.source_label,
             ),
             ResolutionTrace(),
         )
 
-    if request.mode == InputMode.MODEL:
-        if request.manifest_path is None:
+    if spec.mode == InputMode.MODEL:
+        if dbt.manifest_path is None:
             raise ValueError(
-                "InputMode.MODEL requires request.manifest_path to be set"
+                "InputMode.MODEL requires manifest_path to be set"
             )
-        if request.model_name is None:
+        if spec.model_name is None:
             raise ValueError(
-                "InputMode.MODEL requires request.model_name to be set"
+                "InputMode.MODEL requires model_name to be set"
             )
 
-        index = _dbt_manifest.load_manifest(request.manifest_path)
+        index = _dbt_manifest.load_manifest(dbt.manifest_path)
         return (
             _dbt_resolver.resolve_model_query(
-                request.model_name, index, request.variables
+                spec.model_name, index, dbt.variables
             ),
             ResolutionTrace(),
         )
 
-    raise ValueError(f"Unknown mode: {request.mode}")
+    raise ValueError(f"Unknown mode: {spec.mode}")
 
 
 def apply_where(resolved: ResolvedQuery, where: str | None) -> ResolvedQuery:
