@@ -5,8 +5,6 @@ import io
 import json
 import math
 import subprocess
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from google.cloud import bigquery
@@ -35,26 +33,16 @@ from qmb.bigquery.browser import (
     list_dataset_ids,
     list_dataset_tables,
 )
-from qmb.bigquery.exporters import export_results
+from qmb.bigquery.exporters import export_results  # re-exported for tests/monkeypatch  # noqa: F401
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.integrations import clipboard
 from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
+from qmb.tui.export_picker import ExportController
 from qmb.tui.help_screen import HelpScreen
 from qmb.tui.key_router import PendingKeyRouter
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
-
-# ---------------------------------------------------------------------------
-# Export format options
-# ---------------------------------------------------------------------------
-
-_EXPORT_OPTIONS: list[tuple[ExportFormat, str, str]] = [
-    (ExportFormat.CSV, "CSV (.csv)", ".csv"),
-    (ExportFormat.JSON, "JSON (.json)", ".json"),
-    (ExportFormat.PARQUET, "Parquet (.parquet)", ".parquet"),
-]
-
 
 # ---------------------------------------------------------------------------
 # Main app
@@ -166,8 +154,7 @@ class QueryResultApp(App):
         self._cell_matches: list[tuple[int, int]] = []
         self._match_idx: int = -1
         self._filtered_columns: list[int] = []
-        self._filtered_exports: list[int] = []
-        self._export_format: ExportFormat | None = None
+        self._export = ExportController(self)
         self._browser_dataset_ids: list[str] = []
         self._browser_tables_by_dataset: dict[str, tuple[str, ...]] = {}
         self._browser_query = ""
@@ -265,7 +252,7 @@ class QueryResultApp(App):
         self.query_one("#export-filter", Input).display = True
         self.query_one("#history-picker", Vertical).display = False
         self.query_one("#cell-search", Input).display = False
-        self._export_format = None
+        self._export.format = None
         self.query_one("#result-table", DataTable).focus()
 
     def _browser_focus_active(self) -> bool:
@@ -1005,82 +992,25 @@ class QueryResultApp(App):
     # -- export picker ------------------------------------------------------
 
     def _open_export_picker(self) -> None:
-        self._export_format = None
-        picker = self.query_one("#export-picker", Vertical)
-        inp = self.query_one("#export-filter", Input)
-        opt = self.query_one("#export-list", OptionList)
-        inp.display = False
-        opt.display = True
-        picker.display = True
-        self._populate_export_list("")
-        opt.focus()
+        self._export.open()
 
-    def _populate_export_list(self, query: str) -> None:
-        opt = self.query_one("#export-list", OptionList)
-        opt.clear_options()
-        self._filtered_exports.clear()
-        q = query.strip().lower()
-        for i, (_, label, _) in enumerate(_EXPORT_OPTIONS):
-            if not q or q in label.lower():
-                opt.add_option(label)
-                self._filtered_exports.append(i)
-        if self._filtered_exports:
-            opt.highlighted = 0
+    def _select_export_format(self, option_idx: int) -> None:
+        self._export.select_format(option_idx)
+
+    def _quick_export(self, fmt: ExportFormat, ext: str) -> None:
+        self._export.quick_export(fmt, ext)
 
     @on(Input.Changed, "#export-filter")
     def _on_export_filter_changed(self, event: Input.Changed) -> None:
-        if self._export_format is not None:
-            return
-        self._populate_export_list(event.value)
+        self._export.on_filter_changed(event.value)
 
     @on(Input.Submitted, "#export-filter")
     def _on_export_filter_submitted(self, event: Input.Submitted) -> None:
-        if self._export_format is None:
-            opt = self.query_one("#export-list", OptionList)
-            if self._filtered_exports and opt.highlighted is not None:
-                self._select_export_format(opt.highlighted)
-            return
-        # Phase 2: path submitted — do the export
-        inp = self.query_one("#export-filter", Input)
-        export_format = self._export_format
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        ext = next(e for f, _, e in _EXPORT_OPTIONS if f == export_format)
-        path = Path(inp.value or f"{ts}{ext}")
-        self._dismiss_picker()
-        try:
-            count = export_results(self.bq_client, self.handle, export_format, path)
-            self._info(f"Exported {count:,} rows to {path}")
-        except Exception as exc:
-            self._error(f"Export failed: {exc}")
+        self._export.on_filter_submitted()
 
     @on(OptionList.OptionSelected, "#export-list")
     def _on_export_selected(self, event: OptionList.OptionSelected) -> None:
-        self._select_export_format(event.option_index)
-
-    def _select_export_format(self, option_idx: int) -> None:
-        if option_idx < 0 or option_idx >= len(self._filtered_exports):
-            return
-        i = self._filtered_exports[option_idx]
-        fmt, _, ext = _EXPORT_OPTIONS[i]
-        self._export_format = fmt
-        # Switch to path entry phase
-        opt = self.query_one("#export-list", OptionList)
-        opt.display = False
-        inp = self.query_one("#export-filter", Input)
-        inp.display = True
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        inp.placeholder = "Output path…"
-        inp.value = f"{ts}{ext}"
-        inp.focus()
-
-    def _quick_export(self, fmt: ExportFormat, ext: str) -> None:
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        path = Path(f"{ts}{ext}")
-        try:
-            count = export_results(self.bq_client, self.handle, fmt, path)
-            self._info(f"Exported {count:,} rows to {path}")
-        except Exception as e:
-            self._error(f"Export failed: {e}")
+        self._export.on_option_selected(event.option_index)
 
     # -- history picker -----------------------------------------------------
 
