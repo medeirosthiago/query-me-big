@@ -22,7 +22,7 @@ and easy to revert.
 
 Lowest risk, highest clarity-per-effort.
 
-- [ ] Fix README vs CLI mismatch for the browser
+- [x] Fix README vs CLI mismatch for the browser
   - README documents `qmb --browser-only` / `qmb --browse`
   - Actual CLI exposes a `browse` subcommand
   - Decide on one shape (subcommand) and align docs + examples + options table

@@ -69,10 +69,10 @@ qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
 
 ```bash
 # open the dataset/table browser without running a query
-qmb --browser-only --project my-project
+qmb browse --project my-project
 
-# short alias
-qmb --browse --project my-project --location US
+# with an explicit location
+qmb browse --project my-project --location US
 ```
 
 ## Usage
@@ -145,8 +145,8 @@ If `--out` is omitted, defaults to `output.<ext>`.
 Open qmb directly into the dataset/table explorer without executing a query:
 
 ```bash
-qmb --browser-only --project my-project
-qmb --browse --project my-project --location US
+qmb browse --project my-project
+qmb browse --project my-project --location US
 ```
 
 In browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
@@ -164,7 +164,6 @@ In browser-only mode, qmb opens straight into the left-side browser pane and use
 | `--project` | | GCP project ID |
 | `--location` | | BigQuery location (`US`, `EU`, etc.) |
 | `--page-size` | | Rows per page in TUI (default: 200) |
-| `--browser-only`, `--browse` | | Open the dataset/table browser without running a query |
 | `--export` | `-e` | Export format: `csv`, `json`, or `parquet` |
 | `--out` | `-o` | Export output path |
 | `--no-tui` | | Skip TUI, just export or print summary |
