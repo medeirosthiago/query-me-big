@@ -4,10 +4,7 @@ import csv
 import io
 import json
 import math
-import os
-import shlex
 import subprocess
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -44,6 +41,7 @@ from qmb.bigquery.browser import (
 from qmb.bigquery.exporters import export_results
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
+from qmb.integrations.editor import build_editor_command, temp_file_for_editor
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
@@ -1083,26 +1081,10 @@ class QueryResultApp(App):
         prefix: str,
         read_only: bool = True,
     ) -> None:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=suffix, prefix=prefix, delete=False
-        ) as f:
-            f.write(content)
-            tmp_path = f.name
-
-        editor = os.environ.get("EDITOR", "nvim")
-        cmd = shlex.split(editor)
-        exe = Path(cmd[0]).name
-
-        if read_only and exe in {"nvim", "vim", "vi"}:
-            cmd.append("-R")
-
-        cmd.append(tmp_path)
-
-        try:
+        with temp_file_for_editor(content, suffix=suffix, prefix=prefix) as tmp_path:
+            cmd = build_editor_command(tmp_path, read_only=read_only)
             with self.suspend():
                 subprocess.run(cmd, check=False)
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
 
     # -- export picker ------------------------------------------------------
 
