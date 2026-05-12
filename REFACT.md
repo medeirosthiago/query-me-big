@@ -179,19 +179,33 @@ Biggest readability payoff. Do this only after Phases 1–5.
 
 Once orchestration and TUI are split, types are easier to evolve.
 
-- [ ] Replace `destination_table: str` with a structured reference
-  - e.g. `TableRef(project, dataset, table)`
-  - Build `bigquery.TableReference` from it where needed
-- [ ] Replace `schema: list[dict[str, Any]]` with `list[SchemaField]`
-  - Lightweight dataclass with `name`, `type`, `mode`
-- [ ] Reconsider row representation
-  - Likely keep `dict[str, Any]` but isolate conversion helpers
-- [ ] Split `QueryRequest` into focused parts
-  - `InputSpec` (mode, sql, file_path, model_name)
-  - `DbtOptions` (resolve_dbt, manifest_path, variables)
-  - `ExecutionOptions` (project, location, dry_run, max_bytes_billed, where)
-  - `OutputOptions` (export_format, export_path, no_tui, page_size)
-  - `QueryRequest` becomes a thin composition of these
+- [x] Replace `destination_table: str` with a structured reference
+  - Added `TableRef(project, dataset, table)` with `parse` / `__str__` /
+    `is_empty` round-trip
+  - `QueryResultHandle` still stores the string for backwards compatibility
+    with existing test fixtures; a `.destination` property returns the
+    typed view, and `bigquery/pager.py` uses it
+- [x] Replace `schema: list[dict[str, Any]]` with `list[SchemaField]`
+  - Added `SchemaField(name, type, mode)` with `from_mapping` / `to_mapping`
+  - `QueryResultHandle.schema_fields` exposes the typed view; the dict
+    storage stays for backwards compatibility
+  - `bigquery/exporters.py` consumes `handle.schema_fields`
+- [x] Reconsider row representation
+  - Decision: keep `dict[str, Any]` for now; conversion helpers already
+    live in `bigquery/pager.py` (`json_default`, `get_raw_value`,
+    `_format_display`). No structural change.
+- [x] Split `QueryRequest` into focused parts
+  - Added `InputSpec` (mode, sql, file_path, model_name)
+  - Added `DbtOptions` (resolve_dbt, manifest_path, variables)
+  - Added `ExecutionOptions` (project, location, dry_run,
+    max_bytes_billed, where)
+  - Added `OutputOptions` (export_format, export_path, no_tui, page_size)
+  - `QueryRequest` keeps its flat shape (so existing constructions in
+    tests and CLI still work) and exposes the sub-configs via
+    `.input` / `.dbt` / `.execution` / `.output` view properties
+  - Internal helpers (`sql.loader.load_sql`,
+    `application.resolver._resolve`, `application.pipeline`) now use
+    the sub-configs
 
 ---
 
