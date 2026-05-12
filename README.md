@@ -4,7 +4,7 @@ A BigQuery CLI with a vim-style TUI, dbt model support, and export.
 
 ## Installation
 
-Install directly from GitHub:
+Install the latest from GitHub:
 
 ```bash
 uv tool install git+https://github.com/medeirosthiago/query-me-big.git
@@ -20,7 +20,25 @@ If you prefer plain pip:
 pip install "git+https://github.com/medeirosthiago/query-me-big.git"
 ```
 
-For local development:
+### Install a specific version
+
+Pin to a release tag for reproducible installs:
+
+```bash
+uv tool install "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
+pipx install "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
+pip install   "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
+```
+
+See the [releases page](https://github.com/medeirosthiago/query-me-big/releases) for available versions.
+
+Check the installed version at any time:
+
+```bash
+qmb --version
+```
+
+### Local development
 
 ```bash
 uv sync

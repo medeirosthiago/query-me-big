@@ -122,6 +122,24 @@ def test_top_level_help_lists_commands() -> None:
     assert "history" in result.output
 
 
+def test_version_flag_prints_version_and_exits() -> None:
+    from qmb import __version__
+
+    result = CliRunner().invoke(cli.app, ["--version"])
+
+    assert result.exit_code == 0, result.output
+    assert f"qmb {__version__}" in result.output
+
+
+def test_version_short_flag_prints_version_and_exits() -> None:
+    from qmb import __version__
+
+    result = CliRunner().invoke(cli.app, ["-V"])
+
+    assert result.exit_code == 0, result.output
+    assert f"qmb {__version__}" in result.output
+
+
 def test_explicit_run_still_works(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

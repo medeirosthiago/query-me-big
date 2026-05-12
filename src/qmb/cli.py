@@ -23,12 +23,13 @@ class _DefaultRunGroup(TyperGroup):
     """Typer group that falls back to the 'run' command for unknown args."""
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        # Let top-level help flags reach the group itself so users can
-        # discover subcommands (`run`, `browse`, `history`).
+        # Let top-level help / version flags reach the group itself so users
+        # can discover subcommands and check the installed version without
+        # being routed into the `run` command.
         if (
             args
             and args[0] not in self.commands
-            and args[0] not in {"--help", "-h"}
+            and args[0] not in {"--help", "-h", "--version", "-V"}
         ):
             args = ["run", *args]
         return super().parse_args(ctx, args)
@@ -41,6 +42,33 @@ app = typer.Typer(
     cls=_DefaultRunGroup,
 )
 console = Console()
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from qmb import __version__
+
+        typer.echo(f"qmb {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show qmb version and exit",
+        ),
+    ] = False,
+) -> None:
+    """Query Me Big – BigQuery CLI with Textual TUI, dbt support, and export."""
+    # Body intentionally empty — the callback exists so Typer attaches
+    # --version to the top-level group.
+    return None
 
 _INT_PATTERN = re.compile(r"[+-]?(?:0|[1-9]\d*)\Z")
 _FLOAT_PATTERN = re.compile(
