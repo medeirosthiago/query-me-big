@@ -12,7 +12,6 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.css.query import NoMatches
 from textual.events import Key
 from textual.widgets import (
     DataTable,
@@ -23,13 +22,7 @@ from textual.widgets import (
 )
 
 from qmb.bigquery.browser import (
-    BrowserMatch,
     build_table_index,
-    filter_browser_matches,
-    format_dataset_details,
-    format_table_details,
-    get_dataset_metadata,
-    get_table_metadata,
     list_dataset_ids,
     list_dataset_tables,
 )
@@ -39,6 +32,7 @@ from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.integrations import clipboard
 from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
+from qmb.tui.browser_pane import BrowserController
 from qmb.tui.export_picker import ExportController
 from qmb.tui.help_screen import HelpScreen
 from qmb.tui.history_picker import HistoryController
@@ -156,17 +150,34 @@ class QueryResultApp(App):
         self._match_idx: int = -1
         self._filtered_columns: list[int] = []
         self._export = ExportController(self)
-        self._browser_dataset_ids: list[str] = []
-        self._browser_tables_by_dataset: dict[str, tuple[str, ...]] = {}
-        self._browser_query = ""
-        self._browser_selected_dataset: str | None = None
-        self._browser_loading_datasets = False
-        self._browser_loading_index = False
-        self._browser_loading_tables: set[str] = set()
-        self._browser_index_ready = False
-        self._browser_rendering = False
-        self._browser_pending_key: str | None = None
+        self._browser = BrowserController(self)
         self._history = HistoryController(self, history_entries)
+
+    # -- legacy browser-state aliases (kept for backwards-compatible tests) --
+
+    @property
+    def _browser_dataset_ids(self) -> list[str]:
+        return self._browser.dataset_ids
+
+    @_browser_dataset_ids.setter
+    def _browser_dataset_ids(self, value: list[str]) -> None:
+        self._browser.dataset_ids = value
+
+    @property
+    def _browser_tables_by_dataset(self) -> dict[str, tuple[str, ...]]:
+        return self._browser.tables_by_dataset
+
+    @_browser_tables_by_dataset.setter
+    def _browser_tables_by_dataset(self, value: dict[str, tuple[str, ...]]) -> None:
+        self._browser.tables_by_dataset = value
+
+    @property
+    def _browser_index_ready(self) -> bool:
+        return self._browser.index_ready
+
+    @_browser_index_ready.setter
+    def _browser_index_ready(self, value: bool) -> None:
+        self._browser.index_ready = value
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="app-layout"):
@@ -197,18 +208,18 @@ class QueryResultApp(App):
         browser_tree.show_root = False
         browser_tree.auto_expand = False
         browser_tree.root.expand()
-        self._close_browser_search()
-        self._render_browser()
+        self._browser.close_search()
+        self._browser.render()
         if self._history.entries:
             self._open_history_picker()
             return
         if self.start_in_browser:
             panel = self.query_one("#browser-panel", Vertical)
             panel.display = True
-            self._ensure_browser_datasets()
-            self._ensure_browser_index()
-            self._focus_browser_tree()
-            self._render_browser()
+            self._browser.ensure_datasets()
+            self._browser.ensure_index()
+            self._browser.focus_tree()
+            self._browser.render()
             return
         table.focus()
         if self.handle.destination_table and self.handle.total_rows > 0:
@@ -254,361 +265,68 @@ class QueryResultApp(App):
         self._export.format = None
         self.query_one("#result-table", DataTable).focus()
 
-    def _browser_focus_active(self) -> bool:
-        if not self._browser_widgets_ready():
-            return False
-        focused_id = getattr(self.focused, "id", None)
-        return self.query_one("#browser-panel", Vertical).display and focused_id in {
-            "browser-search",
-            "browser-tree",
-        }
-
-    def _browser_widgets_ready(self) -> bool:
-        try:
-            self.query_one("#browser-tree", Tree)
-            self.query_one("#browser-status", Label)
-        except NoMatches:
-            return False
-        return True
+    # -- browser pane delegators -------------------------------------------
 
     def action_toggle_browser(self) -> None:
-        panel = self.query_one("#browser-panel", Vertical)
-        panel.display = not panel.display
-        if panel.display:
-            self._ensure_browser_datasets()
-            self._ensure_browser_index()
-            self._close_browser_search()
-            self._render_browser()
-            self._focus_browser_tree()
-            return
-        self._browser_pending_key = None
-        self._close_browser_search()
-        self.query_one("#result-table", DataTable).focus()
+        self._browser.toggle()
 
     def _focus_browser_tree(self) -> None:
-        tree = self.query_one("#browser-tree", Tree)
-        if tree.cursor_node is None and tree.root.children:
-            tree.select_node(tree.root.children[0])
-        tree.focus()
+        self._browser.focus_tree()
 
     def _open_browser_search(self) -> None:
-        search = self.query_one("#browser-search", Input)
-        search.display = True
-        search.value = self._browser_query
-        search.focus()
+        self._browser.open_search()
 
     def _close_browser_search(self) -> None:
-        search = self.query_one("#browser-search", Input)
-        self._browser_query = search.value
-        search.display = False
+        self._browser.close_search()
 
-    def _ensure_browser_datasets(self) -> None:
-        if self._browser_dataset_ids or self._browser_loading_datasets:
-            return
-        self._browser_loading_datasets = True
-        self._update_browser_status()
-        self._load_browser_datasets()
+    def _render_browser(self) -> None:
+        self._browser.render()
+
+    def _select_browser_dataset(self, dataset_id: str) -> None:
+        self._browser.select_dataset(dataset_id)
+
+    def _move_browser_cursor_first(self) -> None:
+        self._browser.move_cursor_first()
+
+    def _move_browser_cursor_last(self) -> None:
+        self._browser.move_cursor_last()
+
+    def _handle_browser_key(self, event: Key) -> bool:
+        return self._browser.handle_key(event)
+
+    def _browser_focus_active(self) -> bool:
+        return self._browser.focus_active()
 
     @work(thread=True)
     def _load_browser_datasets(self) -> None:
         try:
             dataset_ids = list_dataset_ids(self.bq_client)
         except Exception as exc:
-            self.call_from_thread(self._on_browser_datasets_failed, str(exc))
+            self.call_from_thread(self._browser.on_datasets_failed, str(exc))
             return
-        self.call_from_thread(self._on_browser_datasets_loaded, dataset_ids)
-
-    def _on_browser_datasets_loaded(self, dataset_ids: list[str]) -> None:
-        self._browser_loading_datasets = False
-        self._browser_dataset_ids = dataset_ids
-        if self._browser_selected_dataset not in dataset_ids:
-            self._browser_selected_dataset = None
-        self._render_browser()
-        if self.query_one("#browser-panel", Vertical).display:
-            self._ensure_browser_index()
-
-    def _on_browser_datasets_failed(self, error: str) -> None:
-        self._browser_loading_datasets = False
-        self._render_browser()
-        self._error(f"Browser load failed: {error}")
-
-    def _ensure_browser_index(self) -> None:
-        if (
-            not self._browser_dataset_ids
-            or self._browser_loading_index
-            or self._browser_index_ready
-        ):
-            return
-        self._browser_loading_index = True
-        self._update_browser_status()
-        self._load_browser_index(tuple(self._browser_dataset_ids))
+        self.call_from_thread(self._browser.on_datasets_loaded, dataset_ids)
 
     @work(thread=True)
     def _load_browser_index(self, dataset_ids: tuple[str, ...]) -> None:
         try:
             tables_by_dataset = build_table_index(self.bq_client, dataset_ids)
         except Exception as exc:
-            self.call_from_thread(self._on_browser_index_failed, str(exc))
+            self.call_from_thread(self._browser.on_index_failed, str(exc))
             return
-        self.call_from_thread(self._on_browser_index_loaded, tables_by_dataset)
-
-    def _on_browser_index_loaded(self, tables_by_dataset: dict[str, tuple[str, ...]]) -> None:
-        self._browser_loading_index = False
-        self._browser_index_ready = True
-        self._browser_tables_by_dataset.update(tables_by_dataset)
-        self._render_browser()
-
-    def _on_browser_index_failed(self, error: str) -> None:
-        self._browser_loading_index = False
-        self._render_browser()
-        self._error(f"Table index failed: {error}")
-
-    def _ensure_browser_dataset_tables(self, dataset_id: str) -> None:
-        if (
-            self._browser_index_ready
-            or dataset_id in self._browser_tables_by_dataset
-            or dataset_id in self._browser_loading_tables
-        ):
-            return
-        self._browser_loading_tables.add(dataset_id)
-        self._update_browser_status()
-        self._load_browser_dataset_tables(dataset_id)
+        self.call_from_thread(self._browser.on_index_loaded, tables_by_dataset)
 
     @work(thread=True)
     def _load_browser_dataset_tables(self, dataset_id: str) -> None:
         try:
             table_ids = list_dataset_tables(self.bq_client, dataset_id)
         except Exception as exc:
-            self.call_from_thread(self._on_browser_dataset_tables_failed, dataset_id, str(exc))
-            return
-        self.call_from_thread(self._on_browser_dataset_tables_loaded, dataset_id, table_ids)
-
-    def _on_browser_dataset_tables_loaded(
-        self, dataset_id: str, table_ids: tuple[str, ...]
-    ) -> None:
-        self._browser_loading_tables.discard(dataset_id)
-        self._browser_tables_by_dataset[dataset_id] = table_ids
-        self._render_browser()
-
-    def _on_browser_dataset_tables_failed(self, dataset_id: str, error: str) -> None:
-        self._browser_loading_tables.discard(dataset_id)
-        self._render_browser()
-        self._error(f"Dataset browser failed for {dataset_id}: {error}")
-
-    def _browser_matches(self) -> list[BrowserMatch]:
-        if self._browser_query.strip():
-            return filter_browser_matches(
-                self._browser_dataset_ids,
-                self._browser_tables_by_dataset,
-                self._browser_query,
+            self.call_from_thread(
+                self._browser.on_dataset_tables_failed, dataset_id, str(exc)
             )
-
-        matches: list[BrowserMatch] = []
-        for dataset_id in self._browser_dataset_ids:
-            tables = ()
-            if dataset_id == self._browser_selected_dataset:
-                tables = tuple(
-                    f"{dataset_id}.{table_id}"
-                    for table_id in self._browser_tables_by_dataset.get(dataset_id, ())
-                )
-            matches.append(BrowserMatch(dataset_id=dataset_id, tables=tables))
-        return matches
-
-    def _render_browser(self) -> None:
-        if not self._browser_widgets_ready():
             return
-        tree = self.query_one("#browser-tree", Tree)
-        search = self.query_one("#browser-search", Input)
-        tree.root.remove_children()
-        tree.root.expand()
-
-        matches = self._browser_matches()
-        dataset_nodes: dict[str, Any] = {}
-
-        self._browser_rendering = True
-        try:
-            if not self._browser_dataset_ids and not self._browser_loading_datasets:
-                tree.root.add_leaf("(no datasets)")
-            elif not matches and self._browser_query.strip():
-                tree.root.add_leaf("(no matches)")
-            else:
-                for match in matches:
-                    dataset_node = tree.root.add(
-                        match.dataset_id,
-                        data=("dataset", match.dataset_id),
-                        expand=bool(match.tables),
-                    )
-                    dataset_nodes[match.dataset_id] = dataset_node
-                    for table_name in match.tables:
-                        _, table_id = table_name.split(".", 1)
-                        dataset_node.add_leaf(
-                            table_name,
-                            data=("table", match.dataset_id, table_id),
-                        )
-
-            target_dataset = self._browser_selected_dataset
-            if target_dataset is None and self._browser_query.strip() and matches:
-                target_dataset = matches[0].dataset_id
-
-            if target_dataset in dataset_nodes:
-                tree.select_node(dataset_nodes[target_dataset])
-            elif tree.root.children and tree.has_focus:
-                tree.select_node(tree.root.children[0])
-            else:
-                tree.select_node(None)
-        finally:
-            self._browser_rendering = False
-
-        if search.display:
-            search.value = self._browser_query
-        self._update_browser_status(len(matches))
-
-    def _update_browser_status(self, match_count: int | None = None) -> None:
-        if not self._browser_widgets_ready():
-            return
-        if self._browser_loading_datasets:
-            status = "Loading datasets…"
-        elif self._browser_loading_tables:
-            pending = len(self._browser_loading_tables)
-            status = f"Loading {pending} dataset{'s' if pending != 1 else ''}…"
-        elif self._browser_loading_index:
-            status = f"{len(self._browser_dataset_ids)} datasets · loading tables…"
-        elif self._browser_query.strip():
-            count = 0 if match_count is None else match_count
-            status = f"{count} match{'es' if count != 1 else ''}"
-        else:
-            count = len(self._browser_dataset_ids)
-            status = f"{count} dataset{'s' if count != 1 else ''}"
-        self.query_one("#browser-status", Label).update(status)
-
-    def _select_browser_dataset(self, dataset_id: str) -> None:
-        if not dataset_id:
-            return
-        self._browser_selected_dataset = dataset_id
-        self._ensure_browser_dataset_tables(dataset_id)
-        self._render_browser()
-
-    def _collapse_browser_cursor(self) -> None:
-        if self._browser_query.strip():
-            return
-        tree = self.query_one("#browser-tree", Tree)
-        node = tree.cursor_node
-        if node is None or not node.data:
-            return
-        kind = node.data[0]
-        if kind == "table" and node.parent is not None:
-            node = node.parent
-        if node.data and node.data[0] == "dataset":
-            dataset_id = node.data[1]
-            if self._browser_selected_dataset == dataset_id:
-                self._browser_selected_dataset = None
-                self._render_browser()
-
-    def _activate_browser_cursor(self) -> None:
-        node = self.query_one("#browser-tree", Tree).cursor_node
-        if node is None or not node.data:
-            return
-        if node.data[0] == "dataset":
-            self._select_browser_dataset(node.data[1])
-
-    def _open_browser_details(self) -> None:
-        node = self.query_one("#browser-tree", Tree).cursor_node
-        if node is None or not node.data:
-            self._warn("No browser item selected")
-            return
-
-        try:
-            if node.data[0] == "dataset":
-                dataset_id = node.data[1]
-                dataset = get_dataset_metadata(self.bq_client, dataset_id)
-                details = format_dataset_details(dataset)
-                self._open_in_editor(details, suffix=".txt", prefix=f"qmb_dataset_{dataset_id}_")
-                return
-
-            if node.data[0] == "table":
-                dataset_id = node.data[1]
-                table_id = node.data[2]
-                table = get_table_metadata(self.bq_client, dataset_id, table_id)
-                details = format_table_details(table)
-                self._open_in_editor(details, suffix=".txt", prefix=f"qmb_table_{table_id}_")
-                return
-        except Exception as exc:
-            self._error(f"Browser details failed: {exc}")
-
-    def _move_browser_cursor_first(self) -> None:
-        tree = self.query_one("#browser-tree", Tree)
-        if tree.root.children:
-            tree.move_cursor_to_line(0)
-
-    def _move_browser_cursor_last(self) -> None:
-        tree = self.query_one("#browser-tree", Tree)
-        if tree.root.children:
-            tree.move_cursor_to_line(tree.last_line)
-
-    def _handle_browser_key(self, event: Key) -> bool:
-        if not self._browser_focus_active():
-            return False
-
-        focused_id = getattr(self.focused, "id", None)
-        tree = self.query_one("#browser-tree", Tree)
-
-        if focused_id == "browser-search":
-            if event.key == "enter":
-                self._close_browser_search()
-                self._focus_browser_tree()
-                event.prevent_default()
-                event.stop()
-                return True
-            if event.key == "escape":
-                self._close_browser_search()
-                self._focus_browser_tree()
-                event.prevent_default()
-                event.stop()
-                return True
-            self._browser_pending_key = None
-            return False
-
-        if focused_id == "browser-tree":
-            if self._browser_pending_key == "g":
-                self._browser_pending_key = None
-                if event.key == "g":
-                    self._move_browser_cursor_first()
-                    event.prevent_default()
-                    event.stop()
-                return True
-
-            if event.key == "g":
-                self._browser_pending_key = "g"
-                self.set_timer(0.4, self._on_browser_pending_timeout)
-                event.prevent_default()
-                event.stop()
-                return True
-
-            if event.key in {"j", "down"}:
-                tree.action_cursor_down()
-            elif event.key in {"k", "up"}:
-                tree.action_cursor_up()
-            elif event.key in {"l", "right"}:
-                self._activate_browser_cursor()
-            elif event.key in {"enter", "d"}:
-                self._open_browser_details()
-            elif event.key in {"h", "left"}:
-                self._collapse_browser_cursor()
-            elif event.key == "G":
-                self._move_browser_cursor_last()
-            elif event.key == "slash":
-                self._open_browser_search()
-            elif event.key in {"escape", "b"}:
-                self.action_toggle_browser()
-            else:
-                self._browser_pending_key = None
-                return True
-            self._browser_pending_key = None
-            event.prevent_default()
-            event.stop()
-            return True
-
-        return False
+        self.call_from_thread(
+            self._browser.on_dataset_tables_loaded, dataset_id, table_ids
+        )
 
     def _navigate_option_list(self, list_id: str, event: Key) -> None:
         opt = self.query_one(list_id, OptionList)
@@ -767,8 +485,7 @@ class QueryResultApp(App):
         elif self._key_router.is_pending("y"):
             self._key_router.clear()
 
-    def _on_browser_pending_timeout(self) -> None:
-        self._browser_pending_key = None
+
 
     # -- search -------------------------------------------------------------
 
@@ -799,17 +516,11 @@ class QueryResultApp(App):
 
     @on(Input.Changed, "#browser-search")
     def _on_browser_search_changed(self, event: Input.Changed) -> None:
-        self._browser_query = event.value
-        if self._browser_query.strip():
-            self._ensure_browser_index()
-        self._render_browser()
+        self._browser.on_search_changed(event.value)
 
     @on(Input.Submitted, "#browser-search")
     def _on_browser_search_submitted(self, event: Input.Submitted) -> None:
-        self._browser_query = event.value
-        self._render_browser()
-        self._close_browser_search()
-        self._focus_browser_tree()
+        self._browser.on_search_submitted(event.value)
 
     @on(Tree.NodeHighlighted, "#browser-tree")
     def _on_browser_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
