@@ -30,6 +30,46 @@ class ExportFormat(enum.Enum):
 
 
 @dataclass(frozen=True)
+class InputSpec:
+    """Describes *what* query to run (source of the SQL)."""
+
+    mode: InputMode
+    sql: str | None = None
+    file_path: Path | None = None
+    model_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DbtOptions:
+    """dbt-specific resolution options."""
+
+    resolve_dbt: bool = False
+    manifest_path: Path | None = None
+    variables: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ExecutionOptions:
+    """BigQuery execution options."""
+
+    project: str | None = None
+    location: str | None = None
+    dry_run: bool = False
+    max_bytes_billed: int | None = None
+    where: str | None = None
+
+
+@dataclass(frozen=True)
+class OutputOptions:
+    """What to do with the results (export, TUI, paging)."""
+
+    export_format: ExportFormat | None = None
+    export_path: Path | None = None
+    no_tui: bool = False
+    page_size: int = 200
+
+
+@dataclass(frozen=True)
 class QueryRequest:
     mode: InputMode
     sql: str | None = None
@@ -47,6 +87,42 @@ class QueryRequest:
     dry_run: bool = False
     max_bytes_billed: int | None = None
     where: str | None = None
+
+    @property
+    def input(self) -> InputSpec:
+        return InputSpec(
+            mode=self.mode,
+            sql=self.sql,
+            file_path=self.file_path,
+            model_name=self.model_name,
+        )
+
+    @property
+    def dbt(self) -> DbtOptions:
+        return DbtOptions(
+            resolve_dbt=self.resolve_dbt,
+            manifest_path=self.manifest_path,
+            variables=self.variables,
+        )
+
+    @property
+    def execution(self) -> ExecutionOptions:
+        return ExecutionOptions(
+            project=self.project,
+            location=self.location,
+            dry_run=self.dry_run,
+            max_bytes_billed=self.max_bytes_billed,
+            where=self.where,
+        )
+
+    @property
+    def output(self) -> OutputOptions:
+        return OutputOptions(
+            export_format=self.export_format,
+            export_path=self.export_path,
+            no_tui=self.no_tui,
+            page_size=self.page_size,
+        )
 
 
 @dataclass
