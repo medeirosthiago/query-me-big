@@ -81,26 +81,27 @@ Still low risk, mostly local changes.
 Goal: turn `cli.py` into a thin CLI adapter, push orchestration into reusable
 application functions/services.
 
-- [ ] Introduce an `application/` (or `app/`) module
+- [x] Introduce an `application/` (or `app/`) module
   - Houses orchestration use cases
   - No Typer / Textual imports
-- [ ] Extract `resolve_request_to_sql(request) -> ResolvedQuery`
+- [x] Extract `resolve_request_to_sql(request) -> ResolvedQuery`
   - Encapsulate logic currently in `cli._resolve_sql`
-  - Including dbt auto-detection branch
-  - Including manifest discovery
-- [ ] Extract `apply_where(resolved, where) -> ResolvedQuery`
+  - dbt auto-detection + manifest discovery stay in `cli.py` (UI concern;
+    they print dim status lines). The resolver receives an already-resolved
+    `manifest_path` and returns a `ResolutionTrace` the CLI uses for status.
+- [x] Extract `apply_where(resolved, where) -> ResolvedQuery`
   - Small helper for the `--where` subquery wrap
-- [ ] Extract `run_query_pipeline(request) -> ExecutionOutcome`
+- [x] Extract `run_query_pipeline(request) -> ExecutionOutcome`
   - Runs: resolve → optional `--where` → execute → optional export
   - Returns a structured result instead of side-effecting on console
-- [ ] Keep `cli.py` responsible only for:
+- [x] Keep `cli.py` responsible only for:
   - Typer parsing
   - User input validation
   - Console output / status messages
   - Calling the application layer
   - Launching the TUI
-- [ ] Move local imports out of CLI functions where they no longer matter
-  - Keep deferred imports only where they actually help startup time
+- [x] Move local imports out of CLI functions where they no longer matter
+  - Heavy imports (`google.cloud.bigquery`, `textual`) stay deferred
 
 ---
 
