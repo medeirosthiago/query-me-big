@@ -7,29 +7,16 @@ that used to be printed inline from ``cli._resolve_sql`` without having
 this layer depend on Rich/Typer.
 """
 
-from dataclasses import dataclass
-
 # Import the modules (not their members) so test monkeypatches against
 # the canonical module paths (e.g. ``qmb.dbt.resolver.resolve_file_sql``)
 # are picked up at call time.
+from qmb.application.protocols import ResolutionTrace
 from qmb.dbt import manifest as _dbt_manifest
 from qmb.dbt import resolver as _dbt_resolver
 from qmb.sql import loader as _sql_loader
 from qmb.types import DbtOptions, InputMode, InputSpec, QueryRequest, ResolvedQuery
 
 __all__ = ["ResolutionTrace", "apply_where", "resolve_request_to_sql"]
-
-
-@dataclass(frozen=True)
-class ResolutionTrace:
-    """Optional metadata about how a request was resolved.
-
-    Used by the CLI to render the existing dim status lines (e.g.
-    ``Matched manifest node: ...``). Empty by default.
-    """
-
-    matched_node_id: str | None = None
-    matched_via_raw_code: bool = False
 
 
 def resolve_request_to_sql(
