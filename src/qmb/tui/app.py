@@ -37,6 +37,7 @@ from qmb.tui.export_picker import ExportController
 from qmb.tui.help_screen import HelpScreen
 from qmb.tui.history_picker import HistoryController
 from qmb.tui.key_router import PendingKeyRouter
+from qmb.tui.search import CellSearchController, ColumnPickerController
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
@@ -146,9 +147,8 @@ class QueryResultApp(App):
         self._raw_rows: list[dict[str, Any]] = []
         self._column_names: list[str] = []
         self._key_router = PendingKeyRouter(timeout=0.4)
-        self._cell_matches: list[tuple[int, int]] = []
-        self._match_idx: int = -1
-        self._filtered_columns: list[int] = []
+        self._search = CellSearchController(self)
+        self._columns = ColumnPickerController(self)
         self._export = ExportController(self)
         self._browser = BrowserController(self)
         self._history = HistoryController(self, history_entries)
@@ -368,9 +368,8 @@ class QueryResultApp(App):
             return
 
         # Escape clears search matches
-        if event.key == "escape" and self._cell_matches:
-            self._cell_matches.clear()
-            self._match_idx = -1
+        if event.key == "escape" and self._search.matches:
+            self._search.clear()
             self._info("Search cleared")
             event.prevent_default()
             event.stop()
@@ -442,14 +441,14 @@ class QueryResultApp(App):
             return
 
         # n/N — next/prev match when search is active, else page navigation
-        if event.key == "n" and self._cell_matches:
-            self._goto_match(1)
+        if event.key == "n" and self._search.matches:
+            self._search.goto(1)
             event.prevent_default()
             event.stop()
             return
 
-        if event.key == "N" and self._cell_matches:
-            self._goto_match(-1)
+        if event.key == "N" and self._search.matches:
+            self._search.goto(-1)
             event.prevent_default()
             event.stop()
             return
@@ -487,32 +486,11 @@ class QueryResultApp(App):
 
 
 
-    # -- search -------------------------------------------------------------
+    # -- cell search / column picker / browser search ----------------------
 
     @on(Input.Submitted, "#cell-search")
     def _on_cell_search(self, event: Input.Submitted) -> None:
-        query = event.value.strip().lower()
-        self._dismiss_picker()
-        if not query:
-            return
-
-        matches: list[tuple[int, int]] = []
-        for row_idx, raw_row in enumerate(self._raw_rows):
-            for col_idx, col_name in enumerate(self._column_names):
-                val = str(raw_row.get(col_name, "")).lower()
-                if query in val:
-                    matches.append((row_idx, col_idx))
-
-        self._cell_matches = matches
-        self._match_idx = -1
-
-        if matches:
-            self._goto_match(1)
-            self._info(
-                f"{len(matches)} match{'es' if len(matches) != 1 else ''} · n/N to cycle"
-            )
-        else:
-            self._warn("No matches found")
+        self._search.on_submitted(event.value)
 
     @on(Input.Changed, "#browser-search")
     def _on_browser_search_changed(self, event: Input.Changed) -> None:
@@ -531,57 +509,19 @@ class QueryResultApp(App):
         return None
 
     def _open_column_picker(self) -> None:
-        picker = self.query_one("#column-picker", Vertical)
-        col_filter = self.query_one("#column-filter", Input)
-        col_filter.value = ""
-        picker.display = True
-        self._populate_column_list("")
-        col_filter.focus()
-
-    def _populate_column_list(self, query: str) -> None:
-        col_list = self.query_one("#column-list", OptionList)
-        col_list.clear_options()
-        self._filtered_columns.clear()
-        q = query.strip().lower()
-        for col_idx, col_name in enumerate(self._column_names):
-            if not q or q in col_name.lower():
-                col_list.add_option(col_name)
-                self._filtered_columns.append(col_idx)
-        if self._filtered_columns:
-            col_list.highlighted = 0
+        self._columns.open()
 
     @on(Input.Changed, "#column-filter")
     def _on_column_filter_changed(self, event: Input.Changed) -> None:
-        self._populate_column_list(event.value)
+        self._columns.on_filter_changed(event.value)
 
     @on(Input.Submitted, "#column-filter")
     def _on_column_filter_submitted(self, event: Input.Submitted) -> None:
-        col_list = self.query_one("#column-list", OptionList)
-        if self._filtered_columns and col_list.highlighted is not None:
-            self._select_column(col_list.highlighted)
-        else:
-            self._dismiss_picker()
+        self._columns.on_filter_submitted()
 
     @on(OptionList.OptionSelected, "#column-list")
     def _on_column_selected(self, event: OptionList.OptionSelected) -> None:
-        self._select_column(event.option_index)
-
-    def _select_column(self, option_idx: int) -> None:
-        if option_idx < 0 or option_idx >= len(self._filtered_columns):
-            return
-        col_idx = self._filtered_columns[option_idx]
-        self._dismiss_picker()
-        table = self.query_one("#result-table", DataTable)
-        table.move_cursor(column=col_idx + 1)
-        self._info(f"→ {self._column_names[col_idx]}")
-
-    def _goto_match(self, direction: int) -> None:
-        if not self._cell_matches:
-            return
-        self._match_idx = (self._match_idx + direction) % len(self._cell_matches)
-        row_idx, col_idx = self._cell_matches[self._match_idx]
-        table = self.query_one("#result-table", DataTable)
-        table.move_cursor(row=row_idx, column=col_idx + 1)
+        self._columns.on_option_selected(event.option_index)
 
     # -- clipboard ----------------------------------------------------------
 
@@ -801,8 +741,7 @@ class QueryResultApp(App):
         self.current_page = result.page
         self._raw_rows = result.rows
         self._column_names = []
-        self._cell_matches.clear()
-        self._match_idx = -1
+        self._search.clear()
 
         if not result.display_rows:
             table.add_column("(no results)")
