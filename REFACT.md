@@ -40,7 +40,7 @@ Lowest risk, highest clarity-per-effort.
   - Quick `rg` pass for unreferenced public names — nothing else removable
 - [x] Add a short Architecture section to `README.md`
   - 10–20 lines, mirroring the map in `REVIEW.md`
-- [ ] Note current behavior limitations in README
+- [x] Note current behavior limitations in README
   - Cell search is page-local
   - dbt resolution supports only `ref` / `source` / `var`
   - Browser builds a per-dataset table index

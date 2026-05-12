@@ -290,3 +290,12 @@ The rough dependency shape today: CLI depends on almost everything; the TUI talk
 | `r` | Browse recent query history |
 | `?` | Show all shortcuts |
 | `Ctrl-Q` | Quit |
+
+## Current limitations
+
+A few things are intentionally limited in the current version:
+
+- **Cell search is page-local.** `/` searches only the rows on the current page, not the full result set. Use `n` to jump pages.
+- **dbt SQL resolution is partial.** Only `ref()`, `source()`, and `var()` are resolved from `.sql` files. For full Jinja / macro support, run `dbt compile` and query the compiled model.
+- **Browser indexing can be slow on very large projects.** The browser builds a per-dataset table index up front, which can take a while when a project has many datasets or tables.
+
