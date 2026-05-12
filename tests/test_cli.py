@@ -113,6 +113,15 @@ def test_default_run_group_routes_history_command(monkeypatch) -> None:
     assert "No recent queries found" in result.output
 
 
+def test_top_level_help_lists_commands() -> None:
+    result = CliRunner().invoke(cli.app, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "run" in result.output
+    assert "browse" in result.output
+    assert "history" in result.output
+
+
 def test_explicit_run_still_works(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

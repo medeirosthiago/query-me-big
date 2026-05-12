@@ -22,7 +22,13 @@ class _DefaultRunGroup(TyperGroup):
     """Typer group that falls back to the 'run' command for unknown args."""
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        if args and args[0] not in self.commands:
+        # Let top-level help flags reach the group itself so users can
+        # discover subcommands (`run`, `browse`, `history`).
+        if (
+            args
+            and args[0] not in self.commands
+            and args[0] not in {"--help", "-h"}
+        ):
             args = ["run", *args]
         return super().parse_args(ctx, args)
 

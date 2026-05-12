@@ -30,7 +30,7 @@ Lowest risk, highest clarity-per-effort.
   - Add to README CLI section
   - Add to TUI keyboard shortcuts table (`r` to open history)
   - Mention in Quick Examples
-- [ ] Make top-level `qmb --help` discoverable
+- [x] Make top-level `qmb --help` discoverable
   - Currently shows `run` help due to `_DefaultRunGroup`
   - Decide: keep fallback to `run` but make `qmb --help` show all commands
 - [ ] Remove unused `InputMode.BROWSER`
