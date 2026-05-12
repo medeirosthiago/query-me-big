@@ -203,6 +203,25 @@ Options below apply to `qmb run` (the default command). `qmb browse` accepts `--
 | `--where` | `-w` | WHERE clause appended to the resolved SQL |
 | `--max-bytes-billed` | | Maximum bytes billed safety limit |
 
+## Architecture
+
+A short map of the codebase. See [`REVIEW.md`](REVIEW.md) for the full description and [`REFACT.md`](REFACT.md) for the planned cleanup.
+
+- `src/qmb/cli.py` — Typer entrypoint. Parses input, builds a `QueryRequest`, then orchestrates resolve → execute → export/TUI.
+- `src/qmb/sql/` — plain SQL and `.sql` file loading + normalization.
+- `src/qmb/dbt/` — manifest discovery/loading, model selection, and `ref`/`source`/`var` resolution.
+- `src/qmb/bigquery/` — thin adapters over the BigQuery SDK:
+  - `client.py` builds the client
+  - `executor.py` runs queries
+  - `pager.py` pages through results
+  - `exporters.py` writes CSV / JSON / Parquet
+  - `history.py` lists recent jobs via the Jobs API
+  - `browser.py` lists datasets/tables and formats details for the browser pane
+- `src/qmb/tui/app.py` — Textual app with vim-style keybindings, inline bottom pickers, browser pane, and nvim integration.
+- `src/qmb/types.py` — shared dataclasses and enums (`QueryRequest`, `ResolvedQuery`, `QueryResultHandle`, `PageResult`, `InputMode`, `ExportFormat`).
+
+The rough dependency shape today: CLI depends on almost everything; the TUI talks directly to the BigQuery adapters; dbt sits behind its own module but is still wired into the core request shape.
+
 ## TUI Keyboard Shortcuts
 
 ### Navigation

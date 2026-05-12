@@ -36,9 +36,9 @@ Lowest risk, highest clarity-per-effort.
 - [x] Remove unused `InputMode.BROWSER`
   - Confirm no usage
   - Remove from `src/qmb/types.py`
-- [ ] Audit other dead/leftover symbols
-  - Quick `rg` pass for unreferenced public names
-- [ ] Add a short Architecture section to `README.md`
+- [x] Audit other dead/leftover symbols
+  - Quick `rg` pass for unreferenced public names — nothing else removable
+- [x] Add a short Architecture section to `README.md`
   - 10–20 lines, mirroring the map in `REVIEW.md`
 - [ ] Note current behavior limitations in README
   - Cell search is page-local
