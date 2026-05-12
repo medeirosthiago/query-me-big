@@ -10,7 +10,7 @@ from typing import Any
 from google.cloud import bigquery
 
 from qmb.bigquery.pager import get_raw_value, iter_all_rows, json_default
-from qmb.types import ExportFormat, QueryResultHandle
+from qmb.types import ExportFormat, QueryResultHandle, SchemaField
 
 
 def export_results(
@@ -21,19 +21,22 @@ def export_results(
 ) -> int:
     """Export all query results to the specified format. Returns row count."""
     rows = iter_all_rows(client, handle)
+    schema = handle.schema_fields
 
     if fmt == ExportFormat.CSV:
-        return _export_csv(rows, handle.schema, output_path)
+        return _export_csv(rows, schema, output_path)
     if fmt == ExportFormat.JSON:
-        return _export_json(rows, handle.schema, output_path)
+        return _export_json(rows, schema, output_path)
     if fmt == ExportFormat.PARQUET:
-        return _export_parquet(rows, handle.schema, output_path)
+        return _export_parquet(rows, schema, output_path)
     return 0
 
 
-def _export_csv(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
+def _export_csv(
+    rows: Iterable[dict[str, Any]], schema: list[SchemaField], output_path: Path
+) -> int:
     """Export to CSV."""
-    fieldnames = [col["name"] for col in schema]
+    fieldnames = [f.name for f in schema]
     rows_iter = iter(rows)
     first_row = next(rows_iter, None)
     if first_row is None:
@@ -50,9 +53,11 @@ def _export_csv(rows: Iterable[dict[str, Any]], schema: list[dict], output_path:
     return count
 
 
-def _export_json(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
+def _export_json(
+    rows: Iterable[dict[str, Any]], schema: list[SchemaField], output_path: Path
+) -> int:
     """Export to a streamed JSON array."""
-    fieldnames = [col["name"] for col in schema]
+    fieldnames = [f.name for f in schema]
     rows_iter = iter(rows)
     first_row = next(rows_iter, None)
     if first_row is None:
@@ -71,12 +76,14 @@ def _export_json(rows: Iterable[dict[str, Any]], schema: list[dict], output_path
     return count
 
 
-def _export_parquet(rows: Iterable[dict[str, Any]], schema: list[dict], output_path: Path) -> int:
+def _export_parquet(
+    rows: Iterable[dict[str, Any]], schema: list[SchemaField], output_path: Path
+) -> int:
     """Export to Parquet via pyarrow without loading all rows into memory."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    fieldnames = [col["name"] for col in schema]
+    fieldnames = [f.name for f in schema]
     writer: pq.ParquetWriter | None = None
     count = 0
 
@@ -92,7 +99,7 @@ def _export_parquet(rows: Iterable[dict[str, Any]], schema: list[dict], output_p
         count += len(batch)
 
     if writer is None:
-        columns = {col["name"]: [] for col in schema}
+        columns = {f.name: [] for f in schema}
         table = pa.table(columns)
         pq.write_table(table, str(output_path))
         return 0
