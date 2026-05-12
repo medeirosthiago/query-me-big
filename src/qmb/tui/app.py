@@ -42,6 +42,7 @@ from qmb.integrations import clipboard
 from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
 from qmb.tui.help_screen import HelpScreen
+from qmb.tui.key_router import PendingKeyRouter
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
 
 # ---------------------------------------------------------------------------
@@ -161,7 +162,7 @@ class QueryResultApp(App):
         self.current_page = 0
         self._raw_rows: list[dict[str, Any]] = []
         self._column_names: list[str] = []
-        self._pending_key: str | None = None
+        self._key_router = PendingKeyRouter(timeout=0.4)
         self._cell_matches: list[tuple[int, int]] = []
         self._match_idx: int = -1
         self._filtered_columns: list[int] = []
@@ -672,8 +673,8 @@ class QueryResultApp(App):
             return
 
         # Second key of a pending sequence
-        if self._pending_key == "y":
-            self._clear_pending()
+        if self._key_router.is_pending("y"):
+            self._key_router.clear()
             event.prevent_default()
             event.stop()
             if event.key == "w":
@@ -684,8 +685,8 @@ class QueryResultApp(App):
                 self._copy_row_json()
             return
 
-        if self._pending_key == "x":
-            self._clear_pending()
+        if self._key_router.is_pending("x"):
+            self._key_router.clear()
             if event.key == "c":
                 event.prevent_default()
                 event.stop()
@@ -698,8 +699,8 @@ class QueryResultApp(App):
                 self._open_export_picker()
             return
 
-        if self._pending_key == "g":
-            self._clear_pending()
+        if self._key_router.is_pending("g"):
+            self._key_router.clear()
             event.prevent_default()
             event.stop()
             if event.key == "g":
@@ -708,23 +709,9 @@ class QueryResultApp(App):
             return
 
         # First key — start sequence, search, or navigate
-        if event.key == "y":
-            self._pending_key = "y"
-            self.set_timer(0.4, self._on_pending_timeout)
-            event.prevent_default()
-            event.stop()
-            return
-
-        if event.key == "x":
-            self._pending_key = "x"
-            self.set_timer(0.4, self._on_pending_timeout)
-            event.prevent_default()
-            event.stop()
-            return
-
-        if event.key == "g":
-            self._pending_key = "g"
-            self.set_timer(0.4, self._on_pending_timeout)
+        if event.key in {"y", "x", "g"}:
+            self._key_router.start(event.key)
+            self.set_timer(self._key_router.timeout, self._on_pending_timeout)
             event.prevent_default()
             event.stop()
             return
@@ -788,17 +775,14 @@ class QueryResultApp(App):
             event.prevent_default()
 
     def _on_pending_timeout(self) -> None:
-        if self._pending_key == "x":
-            self._pending_key = None
+        if self._key_router.is_pending("x"):
+            self._key_router.clear()
             self._open_export_picker()
-        elif self._pending_key == "y":
-            self._pending_key = None
+        elif self._key_router.is_pending("y"):
+            self._key_router.clear()
 
     def _on_browser_pending_timeout(self) -> None:
         self._browser_pending_key = None
-
-    def _clear_pending(self) -> None:
-        self._pending_key = None
 
     # -- search -------------------------------------------------------------
 
