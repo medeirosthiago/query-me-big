@@ -330,13 +330,9 @@ def _execute(request: QueryRequest) -> None:
     resolved = _resolve_sql(request)
 
     # Step 1.5: Apply --where clause
-    if request.where:
-        from qmb.types import ResolvedQuery
+    from qmb.application.resolver import apply_where
 
-        resolved = ResolvedQuery(
-            sql=f"SELECT * FROM ({resolved.sql}) __qmb WHERE {request.where}",
-            source_label=resolved.source_label,
-        )
+    resolved = apply_where(resolved, request.where)
 
     # Step 2: Execute
     if request.dry_run:
