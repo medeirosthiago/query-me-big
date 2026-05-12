@@ -385,78 +385,19 @@ def _execute(request: QueryRequest) -> None:
 
 
 def _resolve_sql(request: QueryRequest) -> ResolvedQuery:
-    """Resolve the SQL from the request."""
-    from qmb.types import InputMode
+    """Resolve the SQL from the request and emit dim status messages."""
+    from qmb.application.resolver import resolve_request_to_sql
 
-    if request.mode == InputMode.SQL:
-        from qmb.sql.loader import load_sql
-
-        return load_sql(request)
-
-    if request.mode == InputMode.FILE:
-        from qmb.sql.loader import load_sql
-
-        resolved = load_sql(request)
-
-        if request.resolve_dbt:
-            from qmb.dbt.manifest import discover_manifest_path, load_manifest
-            from qmb.dbt.resolver import resolve_file_sql, resolve_file_to_model
-            from qmb.sql.loader import normalize_sql
-            from qmb.types import ResolvedQuery
-
-            manifest_path = request.manifest_path or discover_manifest_path()
-            index = load_manifest(manifest_path)
-
-            # Try to match file to a compiled manifest node first
-            if request.file_path:
-                node = resolve_file_to_model(str(request.file_path), index)
-                if node:
-                    sql = node.compiled_code
-                    if sql:
-                        console.print(
-                            f"[dim]Matched manifest node: {node.unique_id}[/dim]"
-                        )
-                        return ResolvedQuery(
-                            sql=normalize_sql(sql),
-                            source_label=f"model: {node.name} ({node.unique_id})",
-                        )
-                    # No compiled_code — use raw_code with config stripped
-                    if node.raw_code:
-                        from qmb.dbt.resolver import strip_config_blocks
-
-                        console.print(
-                            f"[dim]Matched {node.unique_id} (no compiled_code, "
-                            "resolving from raw SQL)[/dim]"
-                        )
-                        return resolve_file_sql(
-                            strip_config_blocks(node.raw_code),
-                            index,
-                            request.variables,
-                            source_label=f"model: {node.name} ({node.unique_id})",
-                        )
-
-            return resolve_file_sql(
-                resolved.sql,
-                index,
-                request.variables,
-                source_label=resolved.source_label,
+    resolved, trace = resolve_request_to_sql(request)
+    if trace.matched_node_id:
+        if trace.matched_via_raw_code:
+            console.print(
+                f"[dim]Matched {trace.matched_node_id} (no compiled_code, "
+                "resolving from raw SQL)[/dim]"
             )
-
-        return resolved
-
-    if request.mode == InputMode.MODEL:
-        if request.manifest_path is None:
-            raise ValueError("InputMode.MODEL requires request.manifest_path to be set")
-        if request.model_name is None:
-            raise ValueError("InputMode.MODEL requires request.model_name to be set")
-
-        from qmb.dbt.manifest import load_manifest
-        from qmb.dbt.resolver import resolve_model_query
-
-        index = load_manifest(request.manifest_path)
-        return resolve_model_query(request.model_name, index, request.variables)
-
-    raise typer.BadParameter(f"Unknown mode: {request.mode}")
+        else:
+            console.print(f"[dim]Matched manifest node: {trace.matched_node_id}[/dim]")
+    return resolved
 
 
 if __name__ == "__main__":
