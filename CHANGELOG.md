@@ -9,6 +9,25 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-13
+
+### Added
+
+- Agent/session archive metadata: `qmb run` now records a nested `agent`
+  object in `metadata.json` (and the JSON formatter's `archive.agent`) with
+  agent name, session/conversation/run/turn ids, task label, cwd, git repo
+  state, user, host, tags, and arbitrary metadata.
+- `QMB_SESSION_ID` fallback for `--session-id`, plus `--agent`,
+  `--agent-conversation-id`, `--agent-run-id`, `--agent-turn-id`,
+  `--agent-task`, repeatable `--tag`, repeatable `--meta KEY=VALUE`, and
+  corresponding `QMB_AGENT_*` environment variables for agent workflows.
+- `qmb jobs sessions` to list archived session ids with counts, first/latest
+  timestamps, agent names, and task labels (`--format text|json`, `--limit`).
+- The TUI archived-jobs picker (`J`) now shows session ids when present and
+  includes them in filtering.
+- Project skill at `.agents/skills/qmb/SKILL.md` documenting the agent-facing
+  qmb workflow and replacing `bq` habits with archived qmb commands.
+
 ## [0.3.0] - 2026-05-13
 
 **Headline change — qmb is now CLI-first.** Every command prints structured
