@@ -125,7 +125,7 @@ class QueryResultApp(App):
 
     def __init__(
         self,
-        bq_client: bigquery.Client,
+        bq_client: bigquery.Client | None,
         handle: QueryResultHandle,
         source_label: str,
         resolved_sql: str = "",
@@ -133,11 +133,13 @@ class QueryResultApp(App):
         start_in_browser: bool = False,
         browser_only: bool = False,
         history_entries: list[QueryHistoryEntry] | None = None,
+        result_source: Any | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.bq_client = bq_client
         self.handle = handle
+        self.result_source = result_source
         self.source_label = source_label
         self.resolved_sql = resolved_sql
         self.page_size = page_size
@@ -222,7 +224,7 @@ class QueryResultApp(App):
             self._browser.render()
             return
         table.focus()
-        if self.handle.destination_table and self.handle.total_rows > 0:
+        if self._can_load_results():
             self._load_page(0)
         else:
             self._render_page(
@@ -268,6 +270,9 @@ class QueryResultApp(App):
     # -- browser pane delegators -------------------------------------------
 
     def action_toggle_browser(self) -> None:
+        if self.bq_client is None:
+            self._warn("Browser unavailable for archived jobs")
+            return
         self._browser.toggle()
 
     def _focus_browser_tree(self) -> None:
@@ -656,6 +661,9 @@ class QueryResultApp(App):
     # -- history picker -----------------------------------------------------
 
     def _load_and_open_history(self) -> None:
+        if self.bq_client is None:
+            self._warn("BigQuery history unavailable for archived jobs")
+            return
         self._history.load_and_open()
 
     def _open_history_picker(self) -> None:
@@ -720,9 +728,17 @@ class QueryResultApp(App):
 
     # -- pagination ---------------------------------------------------------
 
+    def _can_load_results(self) -> bool:
+        return self.handle.total_rows > 0 and (
+            self.result_source is not None or bool(self.handle.destination_table)
+        )
+
     @work(thread=True)
     def _load_page(self, page: int) -> None:
-        result = fetch_page(self.bq_client, self.handle, page, self.page_size)
+        if self.result_source is not None:
+            result = self.result_source.page(page, self.page_size)
+        else:
+            result = fetch_page(self.bq_client, self.handle, page, self.page_size)
         self.call_from_thread(self._render_page, result)
 
     def _render_page(self, result: PageResult) -> None:

@@ -120,6 +120,7 @@ def test_top_level_help_lists_commands() -> None:
     assert "run" in result.output
     assert "browse" in result.output
     assert "history" in result.output
+    assert "jobs" in result.output
 
 
 def test_version_flag_prints_version_and_exits() -> None:

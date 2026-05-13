@@ -168,3 +168,38 @@ def test_jobs_paths_json_returns_artifact_paths_for_nvim(
         "preview": str(first.preview_path),
         "result": None,
     }
+
+
+def test_jobs_open_launches_tui_for_archived_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    first, _second = _seed_jobs(jobs_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    captured: dict[str, Any] = {}
+
+    def fake_init(self: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    def fake_run(self: Any) -> None:
+        captured["ran"] = True
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fake_init)
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "open", "abc111", "--page-size", "50"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["ran"] is True
+    assert captured["bq_client"] is None
+    assert captured["source_label"] == f"archive: {first.qmb_job_id}"
+    assert captured["resolved_sql"] == "SELECT 'first' AS label"
+    assert captured["page_size"] == 50
+    assert captured["handle"].job_id == first.qmb_job_id
+    assert captured["handle"].schema == [
+        {"name": "label", "type": "STRING", "mode": "NULLABLE"}
+    ]
+    assert captured["result_source"].__class__.__name__ == "JsonlPreviewResultSource"

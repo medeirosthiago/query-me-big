@@ -379,6 +379,43 @@ def jobs_sql(
     typer.echo(record.query_path.read_text(encoding="utf-8"))
 
 
+@jobs_app.command("open")
+def jobs_open(
+    job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],
+    page_size: Annotated[
+        int,
+        typer.Option("--page-size", help="Rows per page in TUI"),
+    ] = 200,
+) -> None:
+    """Open an archived qmb job preview in the TUI."""
+    from qmb.jobs.result_source import JsonlPreviewResultSource
+    from qmb.tui.app import QueryResultApp
+    from qmb.types import QueryResultHandle
+
+    record = _load_job_or_exit(job_id)
+    source = JsonlPreviewResultSource.from_job(record)
+    schema = record.schema or []
+    handle = QueryResultHandle(
+        job_id=record.qmb_job_id,
+        project=record.engine.project or "",
+        location=record.engine.location or "",
+        destination_table="",
+        schema=[field.to_mapping() for field in schema],
+        total_rows=source.total_rows,
+        bytes_processed=record.bytes_processed,
+        execution_seconds=record.execution_seconds,
+    )
+    tui = QueryResultApp(
+        bq_client=None,
+        handle=handle,
+        source_label=f"archive: {record.qmb_job_id}",
+        resolved_sql=record.query_path.read_text(encoding="utf-8"),
+        page_size=page_size,
+        result_source=source,
+    )
+    tui.run()
+
+
 @jobs_app.command("paths")
 def jobs_paths(
     job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],

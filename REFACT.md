@@ -327,11 +327,18 @@ them pass in small implementation steps.
   - `qmb jobs list`
   - `qmb jobs show <job>`
   - `qmb jobs sql <job>`
+  - `qmb jobs open <job>`
   - `qmb jobs paths <job>`
   - Prefer JSON-capable output to support Phase 10 and nvim integration
 - [x] Add minimal archived-result reading
   - Start with `preview.jsonl`
   - Keep full `result.jsonl` / Parquet archive support for later unless needed
+- [x] Add first TUI bridge for archived job previews
+  - `QueryResultApp` can page from a local result source instead of only
+    BigQuery
+  - `qmb jobs open <job>` opens `preview.jsonl` in the existing TUI without
+    calling BigQuery
+  - This is a Phase 9 bridge, not the full Phase 10 renderer split
 
 ### Phase 9C — Later, not now
 

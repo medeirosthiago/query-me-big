@@ -155,6 +155,56 @@ def test_table_has_focus_on_startup(monkeypatch) -> None:
     asyncio.run(run())
 
 
+class DummyResultSource:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+
+    def page(self, page: int, page_size: int) -> PageResult:
+        self.calls.append((page, page_size))
+        return PageResult(
+            rows=[{"id": 10}],
+            display_rows=[{"id": "10"}],
+            page=page,
+            total_pages=1,
+            total_rows=1,
+        )
+
+
+def test_tui_can_load_page_from_archived_result_source(monkeypatch) -> None:
+    async def run() -> None:
+        source = DummyResultSource()
+        handle = QueryResultHandle(
+            job_id="qmb_job",
+            project="",
+            location="",
+            destination_table="",
+            schema=[{"name": "id", "type": "INTEGER", "mode": "NULLABLE"}],
+            total_rows=1,
+        )
+        app = QueryResultApp(
+            None,
+            handle,
+            "archive: qmb_job",
+            "select 10 as id",
+            page_size=50,
+            result_source=source,
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            assert source.calls == [(0, 50)]
+            assert app._raw_rows == [{"id": 10}]
+            assert app._column_names == ["id"]
+            assert app.query_one("#result-table").has_focus
+
+    monkeypatch.setattr(
+        "qmb.tui.app.fetch_page",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("used BigQuery")),
+    )
+    asyncio.run(run())
+
+
 def test_browser_only_mode_starts_with_browser_open(monkeypatch) -> None:
     async def run() -> None:
         app = QueryResultApp(
