@@ -184,6 +184,17 @@ qmb browse --project my-project -t    # interactive browser pane
 
 In TUI browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
 
+### Inspect a dataset or table
+
+```bash
+qmb describe analytics                # dataset metadata
+qmb describe analytics.orders | jq    # table metadata (schema, partitioning, ...)
+qmb describe proj:analytics.orders    # BQ-native colon syntax
+```
+
+Output matches the BigQuery REST API representation, so the same field
+names work with `jq` queries written against the BigQuery docs.
+
 ### Query history
 
 Browse recent BigQuery jobs (from the Jobs API) as JSON by default, or in the TUI with `-t`:
@@ -217,6 +228,7 @@ qmb jobs open <job>                 # open the preview in the TUI
 |---|---|
 | `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
 | `qmb browse [pattern]` | List datasets/tables as JSON (or open the browser pane with `-t`) |
+| `qmb describe <dataset[.table]>` | Print dataset or table metadata as JSON |
 | `qmb history` | Print recent BigQuery jobs as JSON (or open the picker with `-t`) |
 | `qmb jobs list` | List local qmb job archives |
 | `qmb jobs show <job>` | Show metadata for a local qmb job |

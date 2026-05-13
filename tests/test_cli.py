@@ -307,3 +307,102 @@ def test_browse_with_pattern_returns_filtered_matches(monkeypatch) -> None:
             f"{match['dataset_id']}.orders",
             f"{match['dataset_id']}.users",
         ]
+
+
+def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:
+    """`qmb describe <dataset>` prints {kind:'dataset', dataset:{...}}."""
+    import json as _json
+
+    class FakeDataset:
+        def to_api_repr(self):
+            return {
+                "datasetReference": {"datasetId": "analytics", "projectId": "proj"},
+                "location": "US",
+                "description": "Production analytics",
+            }
+
+    class FakeClient:
+        project = "proj"
+
+        def get_dataset(self, ref):
+            assert ref == "proj.analytics"
+            return FakeDataset()
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    result = CliRunner().invoke(cli.app, ["describe", "analytics"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload["kind"] == "dataset"
+    assert payload["dataset"]["location"] == "US"
+    assert payload["dataset"]["description"] == "Production analytics"
+
+
+def test_describe_table_prints_api_repr_as_json(monkeypatch) -> None:
+    """`qmb describe <dataset.table>` prints {kind:'table', table:{...}}."""
+    import json as _json
+
+    class FakeTable:
+        def to_api_repr(self):
+            return {
+                "tableReference": {
+                    "projectId": "proj",
+                    "datasetId": "analytics",
+                    "tableId": "orders",
+                },
+                "numRows": "1234",
+                "schema": {"fields": [{"name": "id", "type": "INTEGER"}]},
+            }
+
+    class FakeClient:
+        project = "proj"
+
+        def get_table(self, ref):
+            assert ref == "proj.analytics.orders"
+            return FakeTable()
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    result = CliRunner().invoke(cli.app, ["describe", "analytics.orders"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload["kind"] == "table"
+    assert payload["table"]["numRows"] == "1234"
+    assert payload["table"]["schema"]["fields"][0]["name"] == "id"
+
+
+def test_describe_rejects_more_than_three_dotted_parts(monkeypatch) -> None:
+    """4+ dotted parts is a user error."""
+    class FakeClient:
+        project = "proj"
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    result = CliRunner().invoke(cli.app, ["describe", "a.b.c.d"])
+    assert result.exit_code != 0
+    assert "Cannot parse target" in result.output
+
+
+def test_describe_accepts_bq_style_colon_separator(monkeypatch) -> None:
+    """`project:dataset.table` is the BQ-native shorthand; accept it."""
+    import json as _json
+
+    class FakeTable:
+        def to_api_repr(self):
+            return {"numRows": "0"}
+
+    class FakeClient:
+        project = "proj"
+
+        def get_table(self, ref):
+            assert ref == "proj.analytics.orders"
+            return FakeTable()
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    result = CliRunner().invoke(cli.app, ["describe", "proj:analytics.orders"])
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload["kind"] == "table"

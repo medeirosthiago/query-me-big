@@ -509,6 +509,61 @@ def _load_job_or_exit(job_id: str):
 
 
 @app.command()
+def describe(
+    target: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "A dataset (``my_dataset``) or fully-qualified table "
+                "(``my_dataset.my_table``) to inspect."
+            ),
+        ),
+    ],
+    project: Annotated[
+        str | None,
+        typer.Option("--project", help="GCP project ID"),
+    ] = None,
+    location: Annotated[
+        str | None,
+        typer.Option("--location", help="BigQuery location (e.g. US, EU)"),
+    ] = None,
+) -> None:
+    """Print dataset or table metadata as JSON.
+
+    The output mirrors the BigQuery REST API representation: schema,
+    partitioning, clustering, sizes, timestamps, labels, descriptions,
+    and so on. Use this in place of ``bq show --format prettyjson``.
+    """
+    from qmb.bigquery.catalog import get_dataset_metadata, get_table_metadata
+    from qmb.bigquery.client import get_client
+
+    client = get_client(project, location)
+
+    # ``dataset`` vs ``dataset.table`` — colons are also accepted as a
+    # convenience (``project:dataset.table`` is BigQuery's own shorthand).
+    normalized = target.replace(":", ".")
+    parts = normalized.split(".")
+    if len(parts) == 1:
+        dataset = get_dataset_metadata(client, parts[0])
+        payload = {"kind": "dataset", "dataset": dataset.to_api_repr()}
+    elif len(parts) == 2:
+        table = get_table_metadata(client, parts[0], parts[1])
+        payload = {"kind": "table", "table": table.to_api_repr()}
+    elif len(parts) == 3:
+        # project.dataset.table — honor it but require the configured
+        # client's project for now; cross-project describe is out of scope.
+        table = get_table_metadata(client, parts[1], parts[2])
+        payload = {"kind": "table", "table": table.to_api_repr()}
+    else:
+        raise typer.BadParameter(
+            f"Cannot parse target {target!r}. "
+            "Use 'dataset' or 'dataset.table'."
+        )
+
+    typer.echo(json.dumps(payload))
+
+
+@app.command()
 def browse(
     pattern: Annotated[
         str | None,
