@@ -7,8 +7,10 @@ from google.cloud.bigquery.schema import SchemaField
 from textual.widgets import Input, OptionList, Tree
 
 from qmb.bigquery.history import QueryHistoryEntry
+from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
 from qmb.tui.app import QueryResultApp
 from qmb.types import ExportFormat, PageResult, QueryResultHandle
+from qmb.types import SchemaField as QmbSchemaField
 
 
 class DummyBigQueryClient:
@@ -559,6 +561,209 @@ def test_history_picker_dismiss_on_escape(monkeypatch) -> None:
             await pilot.pause()
 
             assert app.query_one("#history-picker").display is False
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def _make_job_record(
+    tmp_path: Path,
+    *,
+    qmb_job_id: str = "qmb_2026-05-13_13-04-32_a1b2c3",
+    label: str = "model: orders",
+    schema: list[QmbSchemaField] | None = None,
+    rows: list[dict] | None = None,
+) -> JobRecord:
+    """Build an on-disk job archive directory and return its JobRecord."""
+    from qmb.jobs.artifacts import write_jsonl_rows
+
+    schema = schema or [QmbSchemaField(name="id", type="INTEGER", mode="NULLABLE")]
+    rows = rows or [{"id": 1}, {"id": 2}]
+
+    directory = tmp_path / qmb_job_id
+    directory.mkdir(parents=True)
+    (directory / "query.sql").write_text("select 1 as id", encoding="utf-8")
+    (directory / "schema.json").write_text("[]", encoding="utf-8")
+    write_jsonl_rows(directory / "preview.jsonl", rows, fieldnames=[f.name for f in schema])
+
+    return JobRecord(
+        qmb_job_id=qmb_job_id,
+        created_at=datetime(2026, 5, 13, 13, 4, 32, tzinfo=UTC),
+        source=SourceMetadata(label=label, input_mode="model", model_name="orders"),
+        engine=EngineMetadata(name="bigquery", job_id="bq-1", project="proj", location="US"),
+        total_rows=len(rows),
+        bytes_processed=4096,
+        execution_seconds=1.5,
+        directory=directory,
+        metadata_path=directory / "metadata.json",
+        query_path=directory / "query.sql",
+        schema_path=directory / "schema.json",
+        preview_path=directory / "preview.jsonl",
+        schema=schema,
+    )
+
+
+def test_jobs_picker_opens_via_J(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        record = _make_job_record(tmp_path)
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            # Inject records so we don't touch JobStore on disk.
+            app._jobs.records = [record]
+            app._jobs.open()
+            await pilot.pause()
+
+            assert app.query_one("#jobs-picker").display is True
+            assert app.query_one("#jobs-filter", Input).has_focus
+            opt = app.query_one("#jobs-list", OptionList)
+            assert opt.option_count == 1
+            label = opt.get_option_at_index(0).prompt
+            assert "model: orders" in label
+            assert "a1b2c3" in label
+            assert "2 rows" in label
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_filters_by_text(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        r1 = _make_job_record(
+            tmp_path,
+            qmb_job_id="qmb_2026-05-13_13-04-32_a1b2c3",
+            label="model: orders",
+        )
+        r2 = _make_job_record(
+            tmp_path,
+            qmb_job_id="qmb_2026-05-13_13-05-00_ff9999",
+            label="file: queries/users.sql",
+        )
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [r1, r2]
+            app._jobs.open()
+            await pilot.pause()
+
+            inp = app.query_one("#jobs-filter", Input)
+            inp.value = "users"
+            await pilot.pause()
+            assert app.query_one("#jobs-list", OptionList).option_count == 1
+
+            inp.value = "a1b2c3"
+            await pilot.pause()
+            assert app.query_one("#jobs-list", OptionList).option_count == 1
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_select_swaps_to_archived_job(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        record = _make_job_record(
+            tmp_path,
+            qmb_job_id="qmb_2026-05-13_13-04-32_a1b2c3",
+            rows=[{"id": 10}, {"id": 20}, {"id": 30}],
+        )
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [record]
+            app._jobs.open()
+            await pilot.pause()
+
+            app._select_jobs_entry(0)
+            await pilot.pause()
+
+            assert app.query_one("#jobs-picker").display is False
+            assert app.source_label == f"archive: {record.qmb_job_id}"
+            assert app.handle.job_id == record.qmb_job_id
+            assert app.handle.total_rows == 3
+            assert app.resolved_sql == "select 1 as id"
+            assert app._raw_rows == [{"id": 10}, {"id": 20}, {"id": 30}]
+            assert app._column_names == ["id"]
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_dismiss_on_escape(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        record = _make_job_record(tmp_path)
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [record]
+            app._jobs.open()
+            await pilot.pause()
+
+            assert app.query_one("#jobs-picker").display is True
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert app.query_one("#jobs-picker").display is False
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_capital_H_opens_history_and_lowercase_r_does_not(monkeypatch) -> None:
+    async def run() -> None:
+        entries = [_make_history_entry("SELECT 1", 0)]
+        app = QueryResultApp(
+            DummyBigQueryClient(),
+            _handle(),
+            "ad-hoc",
+            "select 1",
+        )
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+
+            # Pre-seed entries so capital H opens the picker immediately.
+            app._history.entries = entries
+
+            # Lowercase r should NOT open history anymore.
+            await pilot.press("r")
+            await pilot.pause()
+            assert app.query_one("#history-picker").display is False
+
+            # Capital H opens it.
+            await pilot.press("H")
+            await pilot.pause()
+            assert app.query_one("#history-picker").display is True
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_warns_when_archive_empty(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        # Point JobStore at an empty directory so list() returns [].
+        monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path))
+
+        warned: list[str] = []
+        app._warn = lambda msg: warned.append(msg)
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._load_and_open_jobs()
+            await pilot.pause()
+
+            assert app.query_one("#jobs-picker").display is False
+            assert warned == ["No archived qmb jobs found"]
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
     asyncio.run(run())

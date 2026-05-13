@@ -189,7 +189,22 @@ qmb history --days 14 --limit 300
 qmb history --project my-project --location US
 ```
 
-Inside the TUI, press `r` to open the history picker at any time. Selecting an entry opens the job's SQL in nvim (read-only).
+Inside the TUI, press `H` to open the BigQuery history picker at any time. Selecting an entry opens the job's SQL in nvim (read-only).
+
+### Archived qmb jobs
+
+Every successful (non-dry-run) query is archived locally under `~/.qmb/jobs/<qmb_job_id>/` with its resolved SQL, schema, and a preview of the first rows. Inspect or replay them without touching BigQuery:
+
+```bash
+qmb jobs list                       # newest first
+qmb jobs list --format json         # machine-readable
+qmb jobs show <job>                 # metadata
+qmb jobs sql <job>                  # print the archived SQL
+qmb jobs paths <job> --format json  # absolute paths for editor integrations
+qmb jobs open <job>                 # open the preview in the TUI
+```
+
+`<job>` accepts a full ID (`qmb_2026-05-13_13-04-32_a1b2c3`) or any unambiguous substring. Inside the TUI, press `J` to open the archived-jobs picker and switch the current view to any job's preview without re-running the query.
 
 ## Commands
 
@@ -198,6 +213,11 @@ Inside the TUI, press `r` to open the history picker at any time. Selecting an e
 | `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
 | `qmb browse` | Open the dataset/table browser without running a query |
 | `qmb history` | Browse recent BigQuery query history in the TUI |
+| `qmb jobs list` | List local qmb job archives |
+| `qmb jobs show <job>` | Show metadata for a local qmb job |
+| `qmb jobs sql <job>` | Print the archived resolved SQL for a local qmb job |
+| `qmb jobs paths <job>` | Print artifact paths for a local qmb job |
+| `qmb jobs open <job>` | Open an archived qmb job preview in the TUI |
 
 ## CLI Options
 
@@ -301,11 +321,17 @@ The rough dependency shape today: CLI depends on almost everything; the TUI talk
 | `xc` | Quick export to CSV |
 | `xj` | Quick export to JSON |
 
+### History
+
+| Key | Action |
+|---|---|
+| `H` | Browse recent BigQuery query history |
+| `J` | Browse archived qmb jobs (local `~/.qmb`) |
+
 ### Other
 
 | Key | Action |
 |---|---|
-| `r` | Browse recent query history |
 | `?` | Show all shortcuts |
 | `Ctrl-Q` | Quit |
 

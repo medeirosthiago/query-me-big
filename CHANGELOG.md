@@ -7,6 +7,22 @@ and this project follows a relaxed [Semantic Versioning](https://semver.org/)
 while in the 0.x range (minor bumps may include breaking changes; user-visible
 behavior changes are called out explicitly).
 
+## [Unreleased]
+
+### Added
+- TUI jobs picker: press `J` inside the TUI to browse the local qmb job
+  archive (`~/.qmb/jobs/`). Selecting a job swaps the current view to that
+  job's preview without re-running the query. Filter matches the source
+  label, full or short qmb job ID, and the date string.
+- New module `qmb.tui.jobs_picker` (`JobsController`).
+
+### Changed
+- **TUI keybinding rebound**: BigQuery query history moved from `r` to `H`
+  for consistency with the new `J` (archived qmb jobs) shortcut. Both
+  "history-ish" pickers are now capital letters; `j` (cursor down) is
+  unaffected.
+- Help screen and README shortcut tables updated.
+
 ## [0.2.0] - 2026-05-12
 
 Major internal architecture refactor across 8 phases. **No user-visible

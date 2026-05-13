@@ -32,10 +32,12 @@ from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.integrations import clipboard
 from qmb.integrations.clipboard import ClipboardUnavailable
 from qmb.integrations.editor import build_editor_command, temp_file_for_editor
+from qmb.jobs.models import JobRecord
 from qmb.tui.browser_pane import BrowserController
 from qmb.tui.export_picker import ExportController
 from qmb.tui.help_screen import HelpScreen
 from qmb.tui.history_picker import HistoryController
+from qmb.tui.jobs_picker import JobsController
 from qmb.tui.key_router import PendingKeyRouter
 from qmb.tui.search import CellSearchController, ColumnPickerController
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
@@ -91,16 +93,16 @@ class QueryResultApp(App):
         background: $boost;
         padding: 0 1;
     }
-    #column-picker, #export-picker, #history-picker {
+    #column-picker, #export-picker, #history-picker, #jobs-picker {
         display: none;
         height: auto;
         max-height: 16;
         border: tall $accent;
     }
-    #column-filter, #export-filter, #history-filter {
+    #column-filter, #export-filter, #history-filter, #jobs-filter {
         height: 3;
     }
-    #column-list, #export-list, #history-list {
+    #column-list, #export-list, #history-list, #jobs-list {
         height: auto;
         max-height: 12;
     }
@@ -154,6 +156,7 @@ class QueryResultApp(App):
         self._export = ExportController(self)
         self._browser = BrowserController(self)
         self._history = HistoryController(self, history_entries)
+        self._jobs = JobsController(self)
 
     # -- legacy browser-state aliases (kept for backwards-compatible tests) --
 
@@ -198,6 +201,9 @@ class QueryResultApp(App):
                 with Vertical(id="history-picker"):
                     yield Input(placeholder="Search recent queries…", id="history-filter")
                     yield OptionList(id="history-list")
+                with Vertical(id="jobs-picker"):
+                    yield Input(placeholder="Search archived qmb jobs…", id="jobs-filter")
+                    yield OptionList(id="jobs-list")
                 yield Input(placeholder="Search value…", id="cell-search")
                 yield Label("Page: 1/1  ·  ? for help", id="page-bar")
 
@@ -254,6 +260,7 @@ class QueryResultApp(App):
             self.query_one("#column-picker", Vertical).display
             or self.query_one("#export-picker", Vertical).display
             or self.query_one("#history-picker", Vertical).display
+            or self.query_one("#jobs-picker", Vertical).display
             or self.query_one("#cell-search", Input).display
         )
 
@@ -263,6 +270,7 @@ class QueryResultApp(App):
         self.query_one("#export-list", OptionList).display = True
         self.query_one("#export-filter", Input).display = True
         self.query_one("#history-picker", Vertical).display = False
+        self.query_one("#jobs-picker", Vertical).display = False
         self.query_one("#cell-search", Input).display = False
         self._export.format = None
         self.query_one("#result-table", DataTable).focus()
@@ -355,6 +363,8 @@ class QueryResultApp(App):
                 self._navigate_option_list("#column-list", event)
             elif self.query_one("#history-picker", Vertical).display:
                 self._navigate_option_list("#history-list", event)
+            elif self.query_one("#jobs-picker", Vertical).display:
+                self._navigate_option_list("#jobs-list", event)
             return
 
         if event.key == "b":
@@ -430,8 +440,14 @@ class QueryResultApp(App):
             event.stop()
             return
 
-        if event.key == "r":
+        if event.key == "H":
             self._load_and_open_history()
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "J":
+            self._load_and_open_jobs()
             event.prevent_default()
             event.stop()
             return
@@ -685,6 +701,7 @@ class QueryResultApp(App):
 
     def on_resize(self) -> None:
         self._history.on_resize()
+        self._jobs.on_resize()
 
     @on(Input.Changed, "#history-filter")
     def _on_history_filter_changed(self, event: Input.Changed) -> None:
@@ -697,6 +714,55 @@ class QueryResultApp(App):
     @on(OptionList.OptionSelected, "#history-list")
     def _on_history_selected(self, event: OptionList.OptionSelected) -> None:
         self._history.on_option_selected(event.option_index)
+
+    # -- jobs picker (local qmb archive) -----------------------------------
+
+    def _load_and_open_jobs(self) -> None:
+        self._jobs.load_and_open()
+
+    def _open_jobs_picker(self) -> None:
+        self._jobs.open()
+
+    def _select_jobs_entry(self, option_idx: int) -> None:
+        self._jobs.select(option_idx)
+
+    @on(Input.Changed, "#jobs-filter")
+    def _on_jobs_filter_changed(self, event: Input.Changed) -> None:
+        self._jobs.on_filter_changed(event.value)
+
+    @on(Input.Submitted, "#jobs-filter")
+    def _on_jobs_filter_submitted(self, event: Input.Submitted) -> None:
+        self._jobs.on_filter_submitted()
+
+    @on(OptionList.OptionSelected, "#jobs-list")
+    def _on_jobs_selected(self, event: OptionList.OptionSelected) -> None:
+        self._jobs.on_option_selected(event.option_index)
+
+    def _open_archived_job(self, record: JobRecord) -> None:
+        """Swap the current TUI view to an archived qmb job's preview."""
+        from qmb.jobs.result_source import JsonlPreviewResultSource
+
+        source = JsonlPreviewResultSource.from_job(record)
+        schema = record.schema or []
+        self.result_source = source
+        self.handle = QueryResultHandle(
+            job_id=record.qmb_job_id,
+            project=record.engine.project or "",
+            location=record.engine.location or "",
+            destination_table="",
+            schema=[field.to_mapping() for field in schema],
+            total_rows=source.total_rows,
+            bytes_processed=record.bytes_processed,
+            execution_seconds=record.execution_seconds,
+        )
+        self.source_label = f"archive: {record.qmb_job_id}"
+        try:
+            self.resolved_sql = record.query_path.read_text(encoding="utf-8")
+        except OSError:
+            self.resolved_sql = ""
+        self.current_page = 0
+        self._load_page(0)
+        self._info(f"Loaded archive {record.qmb_job_id}")
 
     # -- job details --------------------------------------------------------
 

@@ -52,7 +52,8 @@ Export
   xj            Quick export to JSON
 
 History
-  r             Browse recent query history
+  H             Browse recent BigQuery query history
+  J             Browse archived qmb jobs (local ~/.qmb)
 
 Other
   ?             Show this help
