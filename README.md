@@ -83,14 +83,17 @@ qmb --model customers --export parquet --out customers.parquet
 qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
 ```
 
-### Browser only
+### Browse the catalog
 
 ```bash
-# open the dataset/table browser without running a query
-qmb browse --project my-project
+# list every dataset in the active project as JSON
+qmb browse --project my-project | jq '.datasets'
 
-# with an explicit location
-qmb browse --project my-project --location US
+# filter datasets and tables by fuzzy match or glob
+qmb browse 'analytics_*' | jq '.matches'
+
+# open the interactive Textual browser pane instead
+qmb browse --project my-project -t
 ```
 
 ### Query history
@@ -168,16 +171,18 @@ qmb --file query.sql --export parquet --out data.parquet
 
 If `--out` is omitted, defaults to `output.<ext>`.
 
-### Browser only
+### Browse the catalog
 
-Open qmb directly into the dataset/table explorer without executing a query:
+List datasets/tables in the active project as JSON, or open the interactive browser with `-t`:
 
 ```bash
-qmb browse --project my-project
-qmb browse --project my-project --location US
+qmb browse                            # {"project": ..., "datasets": [...]}
+qmb browse 'orders'                   # fuzzy match on datasets + tables
+qmb browse 'analytics_*'              # glob pattern
+qmb browse --project my-project -t    # interactive browser pane
 ```
 
-In browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
+In TUI browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
 
 ### Query history
 
@@ -211,7 +216,7 @@ qmb jobs open <job>                 # open the preview in the TUI
 | Command | Description |
 |---|---|
 | `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
-| `qmb browse` | Open the dataset/table browser without running a query |
+| `qmb browse [pattern]` | List datasets/tables as JSON (or open the browser pane with `-t`) |
 | `qmb history` | Print recent BigQuery jobs as JSON (or open the picker with `-t`) |
 | `qmb jobs list` | List local qmb job archives |
 | `qmb jobs show <job>` | Show metadata for a local qmb job |

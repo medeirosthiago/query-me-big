@@ -42,7 +42,8 @@ def test_file_mode_resolve_dbt_auto_discovers_manifest(
     assert request.manifest_path == manifest_path
 
 
-def test_browse_command_routes_correctly(monkeypatch) -> None:
+def test_browse_command_tui_flag_opens_browser_pane(monkeypatch) -> None:
+    """`qmb browse -t` opens the Textual browser pane."""
     captured: dict[str, object] = {}
 
     class FakeClient:
@@ -59,7 +60,7 @@ def test_browse_command_routes_correctly(monkeypatch) -> None:
     monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", FakeApp.__init__)
     monkeypatch.setattr("qmb.tui.app.QueryResultApp.run", FakeApp.run)
 
-    result = CliRunner().invoke(cli.app, ["browse", "--project", "proj"])
+    result = CliRunner().invoke(cli.app, ["browse", "--project", "proj", "-t"])
 
     assert result.exit_code == 0, result.output
     assert captured["browser_only"] is True
@@ -238,3 +239,71 @@ def test_history_tui_flag_opens_the_picker(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert captured["source_label"] == "history"
     assert len(captured["history_entries"]) == 1
+
+
+def test_browse_without_pattern_prints_dataset_ids_as_json(monkeypatch) -> None:
+    """`qmb browse` (no pattern) prints {project, datasets} JSON."""
+    import json as _json
+
+    class FakeClient:
+        project = "proj"
+
+        def list_datasets(self, project=None):
+            return [type("D", (), {"dataset_id": "analytics"})(),
+                    type("D", (), {"dataset_id": "raw"})()]
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    # The TUI must not launch.
+    def fail_init(self, **kwargs):
+        raise AssertionError("browse without -t must not open the TUI")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(cli.app, ["browse"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload == {"project": "proj", "datasets": ["analytics", "raw"]}
+
+
+def test_browse_with_pattern_returns_filtered_matches(monkeypatch) -> None:
+    """`qmb browse <pattern>` returns dataset+table matches as JSON."""
+    import json as _json
+
+    class FakeTable:
+        def __init__(self, table_id: str) -> None:
+            self.table_id = table_id
+
+    class FakeClient:
+        project = "proj"
+
+        def list_datasets(self, project=None):
+            return [type("D", (), {"dataset_id": "analytics_prod"})(),
+                    type("D", (), {"dataset_id": "analytics_dev"})(),
+                    type("D", (), {"dataset_id": "raw"})()]
+
+        def list_tables(self, dataset_ref):
+            return [FakeTable("orders"), FakeTable("users")]
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    def fail_init(self, **kwargs):
+        raise AssertionError("browse without -t must not open the TUI")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(cli.app, ["browse", "analytics_*"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload["project"] == "proj"
+    assert payload["pattern"] == "analytics_*"
+    dataset_ids = sorted(m["dataset_id"] for m in payload["matches"])
+    assert dataset_ids == ["analytics_dev", "analytics_prod"]
+    # Glob match on a dataset id surfaces every table in that dataset.
+    for match in payload["matches"]:
+        assert sorted(match["tables"]) == [
+            f"{match['dataset_id']}.orders",
+            f"{match['dataset_id']}.users",
+        ]

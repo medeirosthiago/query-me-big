@@ -510,6 +510,15 @@ def _load_job_or_exit(job_id: str):
 
 @app.command()
 def browse(
+    pattern: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Optional dataset/table pattern (fuzzy match or glob, "
+                "e.g. 'analytics_*'). Omit to list all datasets."
+            ),
+        ),
+    ] = None,
     project: Annotated[
         str | None,
         typer.Option("--project", help="GCP project ID"),
@@ -518,14 +527,35 @@ def browse(
         str | None,
         typer.Option("--location", help="BigQuery location (e.g. US, EU)"),
     ] = None,
+    tui: Annotated[
+        bool,
+        typer.Option(
+            "--tui",
+            "-t",
+            help="Open the interactive browser pane instead of printing JSON",
+        ),
+    ] = False,
 ) -> None:
-    """Open the dataset/table browser without running a query."""
+    """Inspect datasets and tables in the active project.
+
+    Prints a JSON list of matches to stdout by default. With a positional
+    ``pattern`` (fuzzy or glob, e.g. ``'analytics_*'``) the output is
+    filtered to matching datasets and tables; without one it lists every
+    dataset id. Pass ``-t`` / ``--tui`` to open the interactive Textual
+    browser pane instead.
+    """
     from qmb.bigquery.client import get_client
+
+    client = get_client(project, location)
+
+    if not tui:
+        _browse_print_json(client, pattern, project)
+        return
+
     from qmb.tui.app import QueryResultApp
     from qmb.types import QueryResultHandle
 
-    client = get_client(project, location)
-    tui = QueryResultApp(
+    app_instance = QueryResultApp(
         bq_client=client,
         handle=QueryResultHandle(
             job_id="",
@@ -540,7 +570,35 @@ def browse(
         start_in_browser=True,
         browser_only=True,
     )
-    tui.run()
+    app_instance.run()
+
+
+def _browse_print_json(client: Any, pattern: str | None, project: str | None) -> None:
+    """Print a JSON representation of the catalog (optionally filtered)."""
+    from qmb.bigquery.catalog import build_table_index, list_dataset_ids
+    from qmb.bigquery.catalog_search import filter_browser_matches
+
+    dataset_ids = list_dataset_ids(client)
+
+    if pattern is None:
+        # Cheap path: just the dataset list, no per-dataset table fetch.
+        payload = {
+            "project": getattr(client, "project", None) or project,
+            "datasets": dataset_ids,
+        }
+        typer.echo(json.dumps(payload))
+        return
+
+    tables_by_dataset = build_table_index(client, dataset_ids)
+    matches = filter_browser_matches(dataset_ids, tables_by_dataset, pattern)
+    payload = {
+        "project": getattr(client, "project", None) or project,
+        "pattern": pattern,
+        "matches": [
+            {"dataset_id": m.dataset_id, "tables": list(m.tables)} for m in matches
+        ],
+    }
+    typer.echo(json.dumps(payload))
 
 
 def _execute(request: QueryRequest, *, output_format: Format) -> None:
