@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -69,6 +70,12 @@ class _DefaultRunGroup(TyperGroup):
                     exit_code=result or EXIT_ENGINE_ERROR,
                 )
             return result
+        except click.exceptions.NoArgsIsHelpError:
+            # ``no_args_is_help=True`` intentionally prints help for bare
+            # groups (``qmb`` / ``qmb jobs``). With ``standalone_mode=False``
+            # Click raises after printing; treat that path as a clean help
+            # display rather than emitting the structured error contract.
+            return None
         except click.exceptions.UsageError as e:
             # BadParameter, MissingParameter, NoSuchOption, generic UsageError.
             from qmb.errors import EXIT_USER_ERROR, emit_json_error
@@ -169,6 +176,7 @@ _INT_PATTERN = re.compile(r"[+-]?(?:0|[1-9]\d*)\Z")
 _FLOAT_PATTERN = re.compile(
     r"[+-]?(?:\d+\.\d*|\d*\.\d+|\d+[eE][+-]?\d+|\d+\.\d*[eE][+-]?\d+|\d*\.\d+[eE][+-]?\d+)\Z"
 )
+_DATE_ONLY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 
 
 def _coerce_var_value(raw_value: str) -> Any:
@@ -578,6 +586,7 @@ def jobs_list(
         str | None,
         typer.Option(
             "--session-id",
+            "--session",
             help="Only show jobs tagged with this session id (set on `qmb run`).",
         ),
     ] = None,
@@ -593,39 +602,246 @@ def jobs_list(
         typer.Option(
             "--limit",
             "-l",
-            help="Cap the number of records returned (newest first).",
+            help="Number of records returned, newest first (default: 10; use --all for all).",
         ),
+    ] = None,
+    show_all: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Return all matching jobs instead of the default newest 10.",
+        ),
+    ] = False,
+    agent_name: Annotated[
+        str | None,
+        typer.Option("--agent", help="Only show jobs whose agent/tool name contains this text."),
+    ] = None,
+    date_filter: Annotated[
+        str | None,
+        typer.Option("--date", help="Only show jobs created on this UTC date (YYYY-MM-DD)."),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", help="Only show jobs created at/after this UTC date or ISO time."),
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option("--until", help="Only show jobs created at/before this UTC date or ISO time."),
+    ] = None,
+    file_filter: Annotated[
+        str | None,
+        typer.Option(
+            "--file",
+            help="Only show jobs whose archived file path/label contains this text.",
+        ),
+    ] = None,
+    model_filter: Annotated[
+        str | None,
+        typer.Option("--model", help="Only show jobs whose model name/label contains this text."),
+    ] = None,
+    source_filter: Annotated[
+        str | None,
+        typer.Option(
+            "--source",
+            help="Only show jobs whose source label/path/model/node contains this text.",
+        ),
+    ] = None,
+    query_filter: Annotated[
+        str | None,
+        typer.Option("--query", help="Only show jobs whose archived SQL contains this text."),
     ] = None,
 ) -> None:
     """List local qmb job archives."""
     from qmb.jobs.store import JobStore
 
-    store = JobStore()
-    records = store.list()
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("Invalid format. Use text or json.")
+    if show_all and limit is not None:
+        raise typer.BadParameter("Use either --all or --limit, not both.")
+    if limit is not None and limit < 0:
+        raise typer.BadParameter("--limit must be zero or greater.")
 
-    if session_id is not None:
-        records = [r for r in records if r.session_id == session_id]
-    if parent_job_id is not None:
-        records = [r for r in records if r.parent_job_id == parent_job_id]
-    if limit is not None and limit >= 0:
-        records = records[:limit]
+    effective_limit = None if show_all else (limit if limit is not None else 10)
+
+    store = JobStore()
+    records = _filter_job_records(
+        store.list(),
+        session_id=session_id,
+        parent_job_id=parent_job_id,
+        agent_name=agent_name,
+        date_filter=date_filter,
+        since=since,
+        until=until,
+        file_filter=file_filter,
+        model_filter=model_filter,
+        source_filter=source_filter,
+        query_filter=query_filter,
+    )
+    if effective_limit is not None:
+        records = records[:effective_limit]
 
     if output_format == "json":
-        typer.echo(json.dumps([record.to_metadata() for record in records], indent=2))
+        payload = [_job_record_to_list_metadata(record) for record in records]
+        typer.echo(json.dumps(payload, indent=2))
         return
-    if output_format != "text":
-        raise typer.BadParameter("Invalid format. Use text or json.")
 
     if not records:
         typer.echo("No local qmb jobs found.")
         return
 
     for record in records:
+        session = _record_session_id(record) or "-"
         typer.echo(
             f"{record.created_at:%Y-%m-%d %H:%M:%S}  "
-            f"{record.qmb_job_id}  {record.source.label}  "
-            f"{record.total_rows:,} rows"
+            f"{record.qmb_job_id}  session:{session}  "
+            f"{record.source.label}  {record.total_rows:,} rows"
         )
+
+
+def _filter_job_records(
+    records: list[Any],
+    *,
+    session_id: str | None,
+    parent_job_id: str | None,
+    agent_name: str | None,
+    date_filter: str | None,
+    since: str | None,
+    until: str | None,
+    file_filter: str | None,
+    model_filter: str | None,
+    source_filter: str | None,
+    query_filter: str | None,
+) -> list[Any]:
+    """Apply ``qmb jobs list`` filters, preserving the newest-first order."""
+    filtered = records
+    created_date = _parse_job_date_filter(date_filter)
+    since_dt = _parse_job_datetime_filter(since, end_of_day=False)
+    until_dt = _parse_job_datetime_filter(until, end_of_day=True)
+
+    if session_id is not None:
+        filtered = [record for record in filtered if _record_session_id(record) == session_id]
+    if parent_job_id is not None:
+        filtered = [record for record in filtered if record.parent_job_id == parent_job_id]
+    if agent_name is not None:
+        filtered = [
+            record for record in filtered if _any_contains(agent_name, _record_agent_name(record))
+        ]
+    if created_date is not None:
+        filtered = [
+            record for record in filtered if _record_created_at_utc(record).date() == created_date
+        ]
+    if since_dt is not None:
+        filtered = [record for record in filtered if _record_created_at_utc(record) >= since_dt]
+    if until_dt is not None:
+        filtered = [record for record in filtered if _record_created_at_utc(record) <= until_dt]
+    if file_filter is not None:
+        filtered = [
+            record
+            for record in filtered
+            if _any_contains(file_filter, record.source.file_path, record.source.label)
+        ]
+    if model_filter is not None:
+        filtered = [
+            record
+            for record in filtered
+            if _any_contains(model_filter, record.source.model_name, record.source.label)
+        ]
+    if source_filter is not None:
+        filtered = [
+            record
+            for record in filtered
+            if _any_contains(
+                source_filter,
+                record.source.label,
+                record.source.file_path,
+                record.source.model_name,
+                record.source.matched_node_id,
+            )
+        ]
+    if query_filter is not None:
+        filtered = [
+            record for record in filtered if _any_contains(query_filter, _read_job_sql(record))
+        ]
+    return filtered
+
+
+def _job_record_to_list_metadata(record: Any) -> dict[str, Any]:
+    """Return JSON for ``jobs list`` with a session fallback for old archives."""
+    payload = record.to_metadata()
+    payload["effective_session_id"] = _record_session_id(record)
+    return payload
+
+
+def _record_session_id(record: Any) -> str | None:
+    """Return the archived session id, including legacy agent-only records."""
+    if record.session_id:
+        return record.session_id
+    if record.agent_context is not None:
+        return record.agent_context.session_id
+    return None
+
+
+def _record_agent_name(record: Any) -> str | None:
+    if record.agent_context is None:
+        return None
+    return record.agent_context.name
+
+
+def _record_created_at_utc(record: Any) -> datetime:
+    created_at = record.created_at
+    if created_at.tzinfo is None:
+        return created_at.replace(tzinfo=UTC)
+    return created_at.astimezone(UTC)
+
+
+def _parse_job_date_filter(value: str | None) -> date | None:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not _DATE_ONLY_PATTERN.fullmatch(raw):
+        raise typer.BadParameter("Invalid --date value. Use YYYY-MM-DD.")
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as e:
+        raise typer.BadParameter("Invalid --date value. Use YYYY-MM-DD.") from e
+
+
+def _parse_job_datetime_filter(value: str | None, *, end_of_day: bool) -> datetime | None:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        raise typer.BadParameter("Date/time filters must not be empty.")
+    if _DATE_ONLY_PATTERN.fullmatch(raw):
+        try:
+            parsed_date = date.fromisoformat(raw)
+        except ValueError as e:
+            raise typer.BadParameter(
+                "Invalid date/time filter. Use YYYY-MM-DD or an ISO datetime."
+            ) from e
+        boundary_time = time.max if end_of_day else time.min
+        return datetime.combine(parsed_date, boundary_time, tzinfo=UTC)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise typer.BadParameter(
+            "Invalid date/time filter. Use YYYY-MM-DD or an ISO datetime."
+        ) from e
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _any_contains(needle: str, *haystacks: str | None) -> bool:
+    normalized = needle.casefold()
+    return any(normalized in (haystack or "").casefold() for haystack in haystacks)
+
+
+def _read_job_sql(record: Any) -> str:
+    try:
+        return record.query_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 @jobs_app.command("sessions")

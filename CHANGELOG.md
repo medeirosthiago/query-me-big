@@ -9,6 +9,22 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-13
+
+### Changed
+
+- Bare `qmb` / `qmb jobs` help output no longer emits a structured JSON error
+  after printing usage.
+- `qmb jobs list` now defaults to the newest 10 matching jobs, supports
+  `--all`, displays `session:<id>` in text output, and exposes
+  `effective_session_id` in JSON output for legacy agent-only session archives.
+
+### Added
+
+- `qmb jobs list` filters for `--agent`, `--date`, `--since`, `--until`,
+  `--file`, `--model`, `--source`, and `--query`; `--session` is now an alias
+  for `--session-id`.
+
 ## [0.3.1] - 2026-05-13
 
 ### Added

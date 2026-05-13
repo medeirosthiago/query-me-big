@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import qmb.cli as cli
-from qmb.types import SchemaField
+from qmb.types import AgentContext, SchemaField
 
 
 def _jobs_modules() -> tuple[Any, Any]:
@@ -107,12 +107,169 @@ def test_jobs_list_json_returns_machine_readable_records(
         first.qmb_job_id,
     ]
     assert records[0]["source"]["label"] == "file: second.sql"
+    assert records[0]["effective_session_id"] is None
     assert records[0]["engine"] == {
         "name": "bigquery",
         "job_id": "bq-second",
         "project": "proj",
         "location": "US",
     }
+
+
+def _seed_many_jobs(root: Path, count: int) -> list[Any]:
+    models, store_module = _jobs_modules()
+    store = store_module.JobStore(
+        root=root,
+        now=_iter_callable(
+            [datetime(2026, 5, 12, 10, minute, tzinfo=UTC) for minute in range(count)]
+        ),
+        nonce=_iter_callable([f"{i:06d}" for i in range(count)]),
+    )
+    records = []
+    for i in range(count):
+        records.append(
+            store.create(
+                resolved_sql=f"SELECT {i}",
+                schema=[SchemaField("x", "INTEGER")],
+                preview_rows=[{"x": i}],
+                source=models.SourceMetadata(label=f"job-{i}", input_mode="sql"),
+                engine=models.EngineMetadata(name="bigquery"),
+                total_rows=1,
+            )
+        )
+    return records
+
+
+def test_jobs_list_defaults_to_ten_with_all_and_limit_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    records = _seed_many_jobs(jobs_root, 12)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+
+    default_result = CliRunner().invoke(cli.app, ["jobs", "list", "--format", "json"])
+    all_result = CliRunner().invoke(cli.app, ["jobs", "list", "--format", "json", "--all"])
+    limit_result = CliRunner().invoke(
+        cli.app, ["jobs", "list", "--format", "json", "--limit", "3"]
+    )
+
+    assert default_result.exit_code == 0, default_result.output
+    default_payload = json.loads(default_result.output)
+    assert len(default_payload) == 10
+    assert default_payload[0]["qmb_job_id"] == records[-1].qmb_job_id
+    assert default_payload[-1]["qmb_job_id"] == records[2].qmb_job_id
+
+    assert all_result.exit_code == 0, all_result.output
+    all_payload = json.loads(all_result.output)
+    assert len(all_payload) == 12
+    assert all_payload[-1]["qmb_job_id"] == records[0].qmb_job_id
+
+    assert limit_result.exit_code == 0, limit_result.output
+    assert len(json.loads(limit_result.output)) == 3
+
+
+def test_jobs_list_text_and_json_include_effective_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    models, store_module = _jobs_modules()
+    jobs_root = tmp_path / "jobs"
+    store = store_module.JobStore(
+        root=jobs_root,
+        now=lambda: datetime(2026, 5, 12, 10, 0, tzinfo=UTC),
+        nonce=lambda: "abc123",
+    )
+    store.create(
+        resolved_sql="SELECT 1",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 1}],
+        source=models.SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        agent_context=AgentContext(name="pi", session_id="legacy-session"),
+    )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+
+    text_result = CliRunner().invoke(cli.app, ["jobs", "list"])
+    json_result = CliRunner().invoke(cli.app, ["jobs", "list", "--format", "json"])
+
+    assert text_result.exit_code == 0, text_result.output
+    assert "session:legacy-session" in text_result.output
+
+    assert json_result.exit_code == 0, json_result.output
+    payload = json.loads(json_result.output)
+    assert payload[0]["session_id"] is None
+    assert payload[0]["effective_session_id"] == "legacy-session"
+
+
+def test_jobs_list_filters_by_session_agent_date_file_model_source_and_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    models, store_module = _jobs_modules()
+    jobs_root = tmp_path / "jobs"
+    store = store_module.JobStore(
+        root=jobs_root,
+        now=_iter_callable(
+            [
+                datetime(2026, 5, 12, 10, 0, tzinfo=UTC),
+                datetime(2026, 5, 13, 11, 0, tzinfo=UTC),
+                datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+            ]
+        ),
+        nonce=_iter_callable(["aaaaaa", "bbbbbb", "cccccc"]),
+    )
+    common = {
+        "schema": [SchemaField("x", "INTEGER")],
+        "preview_rows": [{"x": 1}],
+        "engine": models.EngineMetadata(name="bigquery"),
+        "total_rows": 1,
+    }
+    orders = store.create(
+        resolved_sql="SELECT * FROM orders",
+        source=models.SourceMetadata(
+            label="file: models/orders.sql",
+            input_mode="file",
+            file_path="/repo/models/orders.sql",
+        ),
+        session_id="session-a",
+        agent_context=AgentContext(name="pi", session_id="session-a"),
+        **common,
+    )
+    customers = store.create(
+        resolved_sql="SELECT * FROM customers",
+        source=models.SourceMetadata(
+            label="file: models/customers.sql",
+            input_mode="file",
+            file_path="/repo/models/customers.sql",
+        ),
+        agent_context=AgentContext(name="codex"),
+        **common,
+    )
+    revenue = store.create(
+        resolved_sql="SELECT revenue FROM mart",
+        source=models.SourceMetadata(
+            label="model: revenue",
+            input_mode="model",
+            model_name="revenue",
+            matched_node_id="model.pkg.revenue",
+        ),
+        **common,
+    )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+
+    def ids_for(*args: str) -> list[str]:
+        result = CliRunner().invoke(cli.app, ["jobs", "list", "--format", "json", *args])
+        assert result.exit_code == 0, result.output + result.stderr
+        return [record["qmb_job_id"] for record in json.loads(result.output)]
+
+    assert ids_for("--session-id", "session-a") == [orders.qmb_job_id]
+    assert ids_for("--agent", "code") == [customers.qmb_job_id]
+    assert ids_for("--date", "2026-05-13") == [revenue.qmb_job_id, customers.qmb_job_id]
+    assert ids_for("--since", "2026-05-13") == [revenue.qmb_job_id, customers.qmb_job_id]
+    assert ids_for("--until", "2026-05-12") == [orders.qmb_job_id]
+    assert ids_for("--file", "orders.sql") == [orders.qmb_job_id]
+    assert ids_for("--model", "revenue") == [revenue.qmb_job_id]
+    assert ids_for("--source", "customers") == [customers.qmb_job_id]
+    assert ids_for("--query", "revenue") == [revenue.qmb_job_id]
 
 
 def test_jobs_show_json_returns_metadata_for_partial_job_id(

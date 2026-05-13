@@ -191,6 +191,21 @@ def test_help_still_works_with_zero_exit_and_no_stderr() -> None:
     assert "qmb" in result.output.lower() or "Usage" in result.output
 
 
+def test_no_args_help_has_zero_exit_and_no_stderr() -> None:
+    """Bare groups print help through no_args_is_help without JSON errors."""
+    result = _runner().invoke(cli.app, [])
+    assert result.exit_code == EXIT_OK
+    assert result.stderr == ""
+    assert "Usage: qmb" in result.output
+
+
+def test_jobs_no_args_help_has_zero_exit_and_no_stderr() -> None:
+    result = _runner().invoke(cli.app, ["jobs"])
+    assert result.exit_code == EXIT_OK
+    assert result.stderr == ""
+    assert "Usage: qmb jobs" in result.output
+
+
 def test_successful_run_does_not_touch_stderr(monkeypatch) -> None:
     """Happy-path runs leave stderr empty."""
     from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema

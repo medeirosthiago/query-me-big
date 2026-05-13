@@ -196,14 +196,27 @@ interactive picker.
 
 ### `qmb jobs list`
 
-List local qmb job archives. JSON output is suitable for agent workflows.
+List local qmb job archives, newest first. By default this shows the last 10
+matching jobs; use `--all` or `--limit N` to change that. Text output includes
+an inline `session:<id>` column when session metadata is present. JSON output is
+suitable for agent workflows and includes `effective_session_id` as a fallback
+for older archives that only stored the session inside `agent.session_id`.
 
 | Flag | Short | Description |
 |---|---|---|
 | `--format text\|json` | | Output format (default `text`). |
-| `--session-id ID` | | Filter to jobs tagged with this session id. |
+| `--session-id ID` / `--session ID` | | Filter to jobs tagged with this session id. |
 | `--parent-job-id ID` | | Filter to jobs that descend from this parent qmb job id. |
-| `--limit N` | `-l` | Cap the number of records (newest first). |
+| `--limit N` | `-l` | Number of records returned (default `10`). |
+| `--all` | | Return all matching jobs instead of the default newest 10. |
+| `--agent TEXT` | | Filter by agent/tool name (case-insensitive contains). |
+| `--date YYYY-MM-DD` | | Filter to jobs created on this UTC date. |
+| `--since DATE_OR_TIME` | | Filter to jobs created at/after a UTC date or ISO datetime. |
+| `--until DATE_OR_TIME` | | Filter to jobs created at/before a UTC date or ISO datetime. |
+| `--file TEXT` | | Filter by archived file path or source label. |
+| `--model TEXT` | | Filter by dbt model name or source label. |
+| `--source TEXT` | | Filter by source label/path/model/node id. |
+| `--query TEXT` | | Filter by archived SQL text. |
 
 ### `qmb jobs sessions`
 
@@ -410,11 +423,15 @@ and arbitrary `metadata` from `--meta` / `QMB_AGENT_META_JSON`.
 Inspect or replay without touching BigQuery:
 
 ```bash
-qmb jobs list                            # newest first, text
-qmb jobs list --format json              # machine-readable
+qmb jobs list                            # newest 10, text, shows session:<id>
+qmb jobs list --all --format json        # all jobs, machine-readable
+qmb jobs list --limit 25                 # newest 25 matching jobs
 qmb jobs sessions                        # session ids, newest first
 qmb jobs sessions --format json          # session summaries for scripting
 qmb jobs list --session-id agent-42      # filter by agent session
+qmb jobs list --date 2026-05-13          # jobs created on that UTC day
+qmb jobs list --file orders.sql          # file/source-label contains filter
+qmb jobs list --query "customer_id"       # archived SQL contains filter
 qmb jobs show <id>                       # full metadata
 qmb jobs sql <id>                        # archived resolved SQL
 qmb jobs paths <id> --format json        # absolute paths for editor integrations

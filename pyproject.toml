@@ -1,6 +1,6 @@
 [project]
 name = "qmb"
-version = "0.3.1"
+version = "0.3.2"
 description = "Query Me Big – a BigQuery CLI with Textual TUI, dbt support, and export"
 requires-python = ">=3.11"
 dependencies = [

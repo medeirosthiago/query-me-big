@@ -105,7 +105,8 @@ Useful commands:
 ```bash
 qmb jobs sessions
 qmb jobs sessions --format json
-qmb jobs list --format json --session-id "$QMB_SESSION_ID"
+qmb jobs list --format json --session-id "$QMB_SESSION_ID"      # newest 10
+qmb jobs list --all --format json --session-id "$QMB_SESSION_ID" # full session
 qmb jobs show "$qmb_job_id" --format json
 qmb jobs sql "$qmb_job_id"
 qmb jobs paths "$qmb_job_id" --format json
@@ -171,8 +172,8 @@ With `QMB_SESSION_ID` set, use the qmb jobs archive for this session:
 :QmbJobs
 ```
 
-Or inspect from shell:
+Or inspect the full session from shell:
 
 ```bash
-qmb jobs list --format json --session-id "$QMB_SESSION_ID"
+qmb jobs list --all --format json --session-id "$QMB_SESSION_ID"
 ```
