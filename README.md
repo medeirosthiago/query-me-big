@@ -1,6 +1,17 @@
 # qmb — Query Me Big
 
-A BigQuery CLI with a vim-style TUI, dbt model support, and export.
+A headless-first BigQuery CLI. Every command prints structured JSON to stdout
+so it can be piped into `jq`, consumed by agents, or scripted. A vim-style
+Textual TUI is available as an opt-in renderer via `-t` / `--tui`. dbt model
+resolution, local query archives, and CSV/JSON/Parquet export are first-class.
+
+```bash
+# headless by default — perfect for agents and pipelines
+qmb "SELECT user_id, COUNT(*) FROM analytics.events GROUP BY 1 LIMIT 10" | jq '.rows'
+
+# add -t to drop into the interactive TUI instead
+qmb "SELECT * FROM analytics.events LIMIT 1000" -t
+```
 
 ## Installation
 
@@ -46,235 +57,179 @@ uv sync
 
 Requires Python 3.11+ and Google Cloud credentials configured (`gcloud auth application-default login`).
 
-## Quick Examples
 
-### Ad-hoc query
-
-```bash
-# count rows in a table
-qmb "SELECT COUNT(*) FROM \`my-project.analytics.events\`"
-
-# sample rows and browse in the TUI
-qmb "SELECT * FROM \`my-project.analytics.orders\` WHERE status = 'shipped' LIMIT 500"
-
-# dry-run to check cost before executing
-qmb "SELECT * FROM \`my-project.warehouse.big_table\`" --dry-run
-
-# export straight to CSV without opening the TUI
-qmb "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv
-```
-
-### dbt model
+## Quick examples
 
 ```bash
-# query a dbt model (auto-discovers target/manifest.json)
-qmb --model orders
+# ad-hoc query → JSON
+qmb "SELECT COUNT(*) FROM analytics.events"
 
-# explicit manifest path
-qmb --model orders --manifest /path/to/dbt/target/manifest.json
+# dbt model resolved through the manifest → JSON
+qmb --model orders | jq '.rows'
 
-# override dbt variables
-qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
+# run a .sql file from disk
+qmb --file queries/daily_active.sql
 
-# export a dbt model to parquet
-qmb --model customers --export parquet --out customers.parquet
+# dry-run for cost estimation (no execution, no archive)
+qmb "SELECT * FROM warehouse.big_table" --dry-run | jq '.stats.bytes_processed'
 
-# filter a big model with --where (wraps in a subquery at runtime, models untouched)
-qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
-```
+# export to a file (JSON still printed on stdout as a summary)
+qmb "SELECT * FROM core.users" --export csv --out users.csv
 
-### Browse the catalog
-
-```bash
-# list every dataset in the active project as JSON
-qmb browse --project my-project | jq '.datasets'
-
-# filter datasets and tables by fuzzy match or glob
+# explore the catalog
+qmb browse | jq '.datasets[]'
 qmb browse 'analytics_*' | jq '.matches'
+qmb describe analytics.orders | jq '.table.schema'
 
-# open the interactive Textual browser pane instead
-qmb browse --project my-project -t
+# recent BigQuery history (Jobs API)
+qmb history --days 14 | jq '.[].job_id'
+
+# local qmb archive: every successful run is saved under ~/.qmb/jobs/<id>/
+qmb jobs list --format json | jq '.[].qmb_job_id'
+qmb jobs sql <id>
+
+# tag a related batch of agent runs with a session id
+qmb "SELECT 1" --session-id agent-42
+qmb jobs list --format json --session-id agent-42
+
+# drop into the TUI for any command that supports it
+qmb "SELECT * FROM analytics.orders LIMIT 1000" -t
+qmb history -t
+qmb browse -t
 ```
-
-### Query history
-
-```bash
-# browse the last 7 days of query history in the TUI
-qmb history
-
-# look back further and cap the number of jobs fetched
-qmb history --days 30 --limit 500 --project my-project --location US
-```
-
-## Usage
-
-### Ad-hoc SQL
-
-Run an inline query and browse results in the TUI:
-
-```bash
-qmb "SELECT * FROM \`project.dataset.table\` LIMIT 1000"
-```
-
-### Query from a `.sql` file
-
-```bash
-qmb --file queries/my_query.sql
-```
-
-If your `.sql` file contains dbt `ref()`, `source()`, or `var()` calls, resolve them with:
-
-```bash
-qmb --file queries/my_query.sql --resolve-dbt --manifest target/manifest.json
-```
-
-If `--manifest` is omitted, qmb auto-discovers `target/manifest.json` from the current directory and parent directories.
-
-**Auto-detection:** When a `.sql` file lives inside a dbt project (parent `dbt_project.yml`) or `DBT_MODEL_PATH`/`DBT_PROJECT_DIR` env vars are set, `--resolve-dbt` is enabled automatically. If the file matches a manifest node, qmb uses the compiled SQL (after `dbt compile`) or falls back to raw SQL with `ref()`/`source()`/`var()` resolution.
-
-### dbt model
-
-Query a dbt model using its compiled SQL from `manifest.json`:
-
-```bash
-qmb --model orders
-qmb --model orders --manifest path/to/manifest.json
-```
-
-If `--manifest` is omitted, qmb looks for `target/manifest.json` in the current directory and parent directories.
-
-Override dbt variables:
-
-```bash
-qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
-```
-
-When using `--model` with `--var`, qmb resolves the model SQL directly. If the model relies on other dbt Jinja macros, run `dbt compile --vars ...` first and query the compiled model without `--var`.
-
-### Dry run
-
-Validate a query and see estimated bytes without executing:
-
-```bash
-qmb "SELECT * FROM \`project.dataset.table\`" --dry-run
-```
-
-### Export from CLI
-
-Export directly without opening the TUI:
-
-```bash
-qmb "SELECT 1" --export csv --out results.csv
-qmb --model orders --export json --out orders.json
-qmb --file query.sql --export parquet --out data.parquet
-```
-
-If `--out` is omitted, defaults to `output.<ext>`.
-
-### Browse the catalog
-
-List datasets/tables in the active project as JSON, or open the interactive browser with `-t`:
-
-```bash
-qmb browse                            # {"project": ..., "datasets": [...]}
-qmb browse 'orders'                   # fuzzy match on datasets + tables
-qmb browse 'analytics_*'              # glob pattern
-qmb browse --project my-project -t    # interactive browser pane
-```
-
-In TUI browser-only mode, qmb opens straight into the left-side browser pane and uses it as the main view.
-
-### Inspect a dataset or table
-
-```bash
-qmb describe analytics                # dataset metadata
-qmb describe analytics.orders | jq    # table metadata (schema, partitioning, ...)
-qmb describe proj:analytics.orders    # BQ-native colon syntax
-```
-
-Output matches the BigQuery REST API representation, so the same field
-names work with `jq` queries written against the BigQuery docs.
-
-### Query history
-
-Browse recent BigQuery jobs (from the Jobs API) as JSON by default, or in the TUI with `-t`:
-
-```bash
-qmb history                            # JSON array on stdout
-qmb history --days 14 --limit 300 | jq '.[].job_id'
-qmb history --project my-project --location US -t   # interactive picker
-```
-
-Inside the TUI, press `H` to open the BigQuery history picker at any time. Selecting an entry opens the job's SQL in nvim (read-only).
-
-### Archived qmb jobs
-
-Every successful (non-dry-run) query is archived locally under `~/.qmb/jobs/<qmb_job_id>/` with its resolved SQL, schema, and a preview of the first rows. Inspect or replay them without touching BigQuery:
-
-```bash
-qmb jobs list                       # newest first
-qmb jobs list --format json         # machine-readable
-qmb jobs show <job>                 # metadata
-qmb jobs sql <job>                  # print the archived SQL
-qmb jobs paths <job> --format json  # absolute paths for editor integrations
-qmb jobs open <job>                 # open the preview in the TUI
-```
-
-`<job>` accepts a full ID (`qmb_2026-05-13_13-04-32_a1b2c3`) or any unambiguous substring. Inside the TUI, press `J` to open the archived-jobs picker and switch the current view to any job's preview without re-running the query. Each row shows the date, row count, bytes processed, source label, short job ID, and the first part of the resolved SQL. The filter matches against any of these (including SQL text), so you can search for `users` or `model: orders` and narrow the list.
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
-| `qmb browse [pattern]` | List datasets/tables as JSON (or open the browser pane with `-t`) |
-| `qmb describe <dataset[.table]>` | Print dataset or table metadata as JSON |
-| `qmb history` | Print recent BigQuery jobs as JSON (or open the picker with `-t`) |
-| `qmb jobs list` | List local qmb job archives |
-| `qmb jobs show <job>` | Show metadata for a local qmb job |
-| `qmb jobs sql <job>` | Print the archived resolved SQL for a local qmb job |
-| `qmb jobs paths <job>` | Print artifact paths for a local qmb job |
-| `qmb jobs open <job>` | Open an archived qmb job preview in the TUI |
+| `qmb run [QUERY]` | Run a BigQuery query. Default `qmb` falls through to `run` when no other subcommand matches. |
+| `qmb browse [PATTERN]` | List datasets/tables. With a fuzzy or glob pattern, filter to matches. |
+| `qmb describe TARGET` | Print dataset or table metadata (BigQuery REST shape). |
+| `qmb history` | Print recent BigQuery jobs from the Jobs API. |
+| `qmb jobs list` | List local qmb job archives. |
+| `qmb jobs show JOB_ID` | Print metadata for a local qmb job. |
+| `qmb jobs sql JOB_ID` | Print the archived resolved SQL for a local qmb job. |
+| `qmb jobs paths JOB_ID` | Print artifact paths for a local qmb job. |
+| `qmb jobs open JOB_ID` | Open an archived qmb job's row preview in the TUI. |
+| `qmb --version` / `-V` | Print the installed qmb version. |
+| `qmb --help` | Top-level command list. Every subcommand also accepts `--help`. |
 
-## CLI Options
+Every command supports `--help` for the full flag list.
 
-Options below apply to `qmb run` (the default command). `qmb browse` accepts `--project` and `--location`. `qmb history` accepts `--days`, `--limit`, `--project`, `--location`, and `--page-size`.
+## Command reference
 
-| Option | Short | Description |
+### `qmb run`
+
+Run a BigQuery query. Default output: a single JSON object on stdout. Pass
+`-t` / `--tui` to open the Textual app instead. Exactly one of the positional
+`QUERY`, `--file`, or `--model` must be provided.
+
+| Flag | Short | Description |
 |---|---|---|
-| `query` | | Positional SQL query argument |
-| `--file` | `-f` | Path to a `.sql` file |
-| `--model` | `-m` | dbt model name |
-| `--manifest` | | Path to `manifest.json` |
-| `--resolve-dbt` | | Resolve `ref`/`source`/`var` in SQL files |
-| `--var` | `-v` | dbt variable override `key=value` (repeatable) |
-| `--project` | | GCP project ID |
-| `--location` | | BigQuery location (`US`, `EU`, etc.) |
-| `--page-size` | | Rows per page in TUI (default: 200) |
-| `--export` | `-e` | Export format: `csv`, `json`, or `parquet` |
-| `--out` | `-o` | Export output path |
-| `--tui` | `-t` | Open the interactive Textual TUI instead of printing JSON |
-| `--dry-run` | | Validate query without executing |
-| `--where` | `-w` | WHERE clause appended to the resolved SQL |
-| `--max-bytes-billed` | | Maximum bytes billed safety limit |
-| `--format` | | Output format: `json` (default), `csv`, `table`, `tui` |
+| `QUERY` (positional) | | Inline SQL query. |
+| `--file PATH` | `-f` | Read SQL from a `.sql` file. Use `-` to read from stdin. |
+| `--model NAME` | `-m` | dbt model name; uses compiled SQL from the manifest. |
+| `--manifest PATH` | | Path to `manifest.json` (auto-discovered if omitted). |
+| `--resolve-dbt` / `--no-resolve-dbt` | | Resolve `ref()` / `source()` / `var()` in `.sql` files. Auto-enabled inside a dbt project. |
+| `--var KEY=VALUE` | `-v` | Override a dbt variable (repeatable). |
+| `--project ID` | | GCP project ID. |
+| `--location US\|EU\|...` | | BigQuery location. |
+| `--page-size N` | | Rows per page in the TUI (default `200`). |
+| `--export csv\|json\|parquet` | `-e` | Also export full results to a file. |
+| `--out PATH` | `-o` | Export output path (defaults to `output.<ext>`). |
+| `--where CLAUSE` | `-w` | Wrap the resolved SQL in a subquery with this `WHERE`. |
+| `--dry-run` | | Validate + estimate bytes without executing or archiving. |
+| `--max-bytes-billed N` | | BigQuery safety limit (bytes). |
+| `--session-id ID` | | Tag this run with an agent/session id. Persisted in the archive. |
+| `--parent-job-id ID` | | Reference a prior qmb job this run derives from. |
+| `--format json\|csv\|table\|tui` | | Override the output renderer (default `json`). |
+| `--tui` | `-t` | Shortcut for `--format tui`. |
 
-## Headless / agent mode (`--format`)
+### `qmb browse [PATTERN]`
 
-qmb is headless by default: every command prints structured JSON to stdout
-so it can be piped into `jq` or consumed by AI agents without screen-scraping
-the TUI. The TUI is opt-in via `-t` / `--tui`.
+Inspect datasets and tables. Without a pattern, prints the project's full
+dataset list. With a fuzzy or glob pattern, prints matching datasets and
+tables. Pass `-t` to open the Textual browser pane.
 
-For `qmb run`, four formats are available:
+| Flag | Short | Description |
+|---|---|---|
+| `PATTERN` (positional) | | Fuzzy match (e.g. `orders`) or glob (e.g. `analytics_*`). |
+| `--project ID` | | GCP project ID. |
+| `--location US\|EU\|...` | | BigQuery location. |
+| `--tui` | `-t` | Open the interactive browser pane instead of printing JSON. |
 
-- `json` — structured JSON object on stdout (**default**, see schema below)
-- `csv` — CSV with a header row drawn from the result schema
-- `table` — Rich status lines on stdout, no TUI
-- `tui` — launch the Textual app (also reachable via `-t` / `--tui`)
+### `qmb describe TARGET`
 
-### JSON schema for `qmb run --format json`
+Print dataset or table metadata as JSON, mirroring `bq show --format prettyjson`.
+The shape is the BigQuery REST API representation (schema, partitioning,
+clustering, sizes, timestamps, labels, descriptions, ...).
 
-Successful (non-dry-run) execution:
+| Flag | Description |
+|---|---|
+| `TARGET` (positional, required) | `dataset` or `dataset.table`. The BQ-native `project:dataset.table` shorthand is also accepted. |
+| `--project ID` | GCP project ID. |
+| `--location US\|EU\|...` | BigQuery location. |
+
+### `qmb history`
+
+Print recent BigQuery jobs (Jobs API) as a JSON array. Pass `-t` to open the
+interactive picker.
+
+| Flag | Short | Description |
+|---|---|---|
+| `--days N` | `-d` | Look back N days (default `7`). |
+| `--limit N` | `-l` | Cap the number of jobs fetched (default `200`). |
+| `--project ID` | | GCP project ID. |
+| `--location US\|EU\|...` | | BigQuery location. |
+| `--page-size N` | | Rows per page in the TUI (default `200`). |
+| `--tui` | `-t` | Open the interactive history picker. |
+
+### `qmb jobs list`
+
+List local qmb job archives. JSON output is suitable for agent workflows.
+
+| Flag | Short | Description |
+|---|---|---|
+| `--format text\|json` | | Output format (default `text`). |
+| `--session-id ID` | | Filter to jobs tagged with this session id. |
+| `--parent-job-id ID` | | Filter to jobs that descend from this parent qmb job id. |
+| `--limit N` | `-l` | Cap the number of records (newest first). |
+
+### `qmb jobs show JOB_ID`
+
+Print metadata for one archived job.
+
+| Flag | Description |
+|---|---|
+| `JOB_ID` (positional, required) | Full or unambiguous-prefix qmb job id. |
+| `--format text\|json` | Output format (default `text`). |
+
+### `qmb jobs sql JOB_ID`
+
+Print the archived resolved SQL for a local qmb job — exact text that was
+sent to BigQuery (post-dbt resolution, post-`--where` wrap).
+
+### `qmb jobs paths JOB_ID`
+
+Print the absolute filesystem paths to each artifact (`metadata.json`,
+`query.sql`, `schema.json`, `preview.jsonl`).
+
+| Flag | Description |
+|---|---|
+| `--format text\|json` | Output format (default `text`). |
+
+### `qmb jobs open JOB_ID`
+
+Open an archived job's row preview in the Textual TUI without re-running the
+query. The interactive verb — always TUI-first.
+
+| Flag | Description |
+|---|---|
+| `--page-size N` | Rows per page in the TUI (default `200`). |
+
+## JSON output schemas
+
+### `qmb run` — success
 
 ```json
 {
@@ -291,16 +246,20 @@ Successful (non-dry-run) execution:
   "schema": [{"name": "id", "type": "INTEGER", "mode": "NULLABLE"}],
   "rows":   [{"id": 1}],
   "archive": {
-    "qmb_job_id": "20260101T120000-abc12345",
-    "session_id": null,
+    "qmb_job_id":    "20260101T120000-abc12345",
+    "session_id":    null,
     "parent_job_id": null,
-    "error": null
+    "error":         null
   },
   "export":  null
 }
 ```
 
-Dry run:
+`archive.qmb_job_id` matches the local archive entry under
+`~/.qmb/jobs/<id>/` so an agent can immediately recover the resolved SQL,
+schema, and the first 500 rows with `qmb jobs show <id>` / `qmb jobs sql <id>`.
+
+### `qmb run` — dry run
 
 ```json
 {
@@ -311,34 +270,174 @@ Dry run:
 }
 ```
 
-Value coercion: dates and timestamps become ISO 8601 strings, `NUMERIC` /
-`BIGNUMERIC` become floats, `BYTES` becomes a hex string, nested
-`STRUCT`/`ARRAY` are preserved as nested JSON. The `archive.qmb_job_id`
-field matches the local archive entry written under `~/.qmb/jobs/<id>/`
-(see [Archived qmb jobs](#archived-qmb-jobs)) so an agent can immediately
-recover the resolved SQL, schema, and a row preview with
-`qmb jobs show <id>` / `qmb jobs sql <id>`.
+### `qmb run --format csv`
+
+A CSV with a header row drawn from the result schema, followed by all rows.
+
+### Errors (`stderr`, every command)
+
+Failures emit a single JSON object on **stderr** and exit with a categorized
+code (see [Exit codes](#exit-codes)):
+
+```json
+{
+  "error": {
+    "type": "user_error",
+    "message": "Invalid format: 'ndjson'. Use one of: json, csv, table, tui.",
+    "details": {"class": "BadParameter"}
+  }
+}
+```
+
+`type` values: `user_error`, `engine_error`, `internal_error`, `interrupted`.
+
+## Value coercion in JSON / CSV output
+
+Row values from BigQuery are JSON-coerced as follows:
+
+- Dates, datetimes, and times → ISO 8601 strings
+- `NUMERIC` / `BIGNUMERIC` → floats
+- `BYTES` → hex strings
+- `STRUCT` / `ARRAY` → nested JSON (preserved as-is in JSON output; serialized
+  as a JSON string in CSV cells)
+- Any unknown type → `str(value)` as a fallback
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | User error: bad flag, missing file, unknown format, ambiguous or missing qmb job id. |
+| `2` | Engine / internal error: BigQuery API failure, permission denied, unexpected exception. |
+| `3` | Local IO / archive error (reserved). |
+| `130` | Interrupted (Ctrl-C / SIGINT). |
+
+Combined with the JSON error shape on stderr, this makes qmb safe to script:
+
+```bash
+if ! result=$(qmb "SELECT * FROM analytics.orders" 2>err.json); then
+  echo "qmb failed: $(jq -r '.error.message' err.json)"
+  exit 1
+fi
+echo "$result" | jq '.rows'
+```
+
+## dbt support
+
+When the query input is a `.sql` file or a model name, qmb resolves dbt
+references:
+
+- **`qmb --model orders`** — looks up the model in `target/manifest.json` and
+  uses its compiled SQL (after `dbt compile`). If the compiled SQL is absent,
+  falls back to raw SQL with `ref()`, `source()`, and `var()` resolved.
+- **`qmb --file path/to/query.sql --resolve-dbt`** — same resolution applied to
+  an arbitrary `.sql` file.
+- **Auto-detection** — `--resolve-dbt` is enabled automatically when the file
+  lives inside a dbt project (a parent `dbt_project.yml` exists) or the
+  `DBT_PROJECT_DIR` / `DBT_MODEL_PATH` env vars are set.
+- **`--manifest PATH`** is optional; qmb auto-discovers `target/manifest.json`
+  by walking up from the working directory.
+- **`--var KEY=VALUE`** overrides individual dbt variables. Repeatable.
+
+For full Jinja / macro support, run `dbt compile` and query the compiled
+model — qmb's resolver intentionally only handles `ref` / `source` / `var`.
+
+## Archived qmb jobs
+
+Every successful (non-dry-run) query is archived locally under
+`~/.qmb/jobs/<qmb_job_id>/` with:
+
+```text
+metadata.json    # qmb job id, BQ job id, project/location, bytes, rows, timing, source
+query.sql        # exact resolved SQL sent to BigQuery
+schema.json      # result schema
+preview.jsonl    # first 500 rows for fast browsing / nvim preview
+```
+
+Inspect or replay without touching BigQuery:
+
+```bash
+qmb jobs list                            # newest first, text
+qmb jobs list --format json              # machine-readable
+qmb jobs list --session-id agent-42      # filter by agent session
+qmb jobs show <id>                       # full metadata
+qmb jobs sql <id>                        # archived resolved SQL
+qmb jobs paths <id> --format json        # absolute paths for editor integrations
+qmb jobs open <id>                       # browse the preview in the TUI
+```
+
+`<id>` accepts a full job id or any unambiguous substring. Inside the TUI,
+press `J` to switch the current view to any archived job's preview without
+re-running it. The picker filters against the date, row count, bytes
+processed, source label, short job id, and the SQL text — so you can search
+for `users` or `model: orders` and narrow the list.
+
+## `--format` and renderers
+
+`qmb run` supports four renderers:
+
+| `--format` | What it produces |
+|---|---|
+| `json` (**default**) | One structured JSON object on stdout. |
+| `csv` | CSV header + rows on stdout. |
+| `table` | Rich status lines (no TUI, no JSON). |
+| `tui` | Launches the Textual TUI (also reachable via `-t`). |
+
+`qmb browse` and `qmb history` print JSON by default and accept `-t` for
+their respective TUI panes; other commands have one natural output shape and
+do not take `--format`.
+
+## Headless by default; TUI is opt-in
+
+The contract for every command:
+
+- **No `--tui` flag → JSON to stdout, exit cleanly.** Safe for `jq`, agents,
+  pipelines, cron.
+- **`-t` or `--tui` flag → open the Textual TUI.** Only `qmb run`,
+  `qmb history`, `qmb browse`, and `qmb jobs open` accept it.
+- **Errors → JSON to stderr + categorized exit code.** Stdout stays clean.
+
+`qmb jobs open` is the only command that's TUI-first by design; the verb
+itself means interactive.
 
 ## Architecture
 
-A short map of the codebase. See [`REVIEW.md`](REVIEW.md) for the full description and [`REFACT.md`](REFACT.md) for the planned cleanup.
+Layered, CLI-first. The TUI is one renderer among several. See
+[`REVIEW.md`](REVIEW.md) and [`REFACT.md`](REFACT.md) for the full notes.
 
-- `src/qmb/cli.py` — Typer entrypoint. Parses input, builds a `QueryRequest`, then orchestrates resolve → execute → export/TUI.
-- `src/qmb/sql/` — plain SQL and `.sql` file loading + normalization.
-- `src/qmb/dbt/` — manifest discovery/loading, model selection, and `ref`/`source`/`var` resolution.
-- `src/qmb/bigquery/` — thin adapters over the BigQuery SDK:
-  - `client.py` builds the client
-  - `executor.py` runs queries
-  - `pager.py` pages through results
-  - `exporters.py` writes CSV / JSON / Parquet
-  - `history.py` lists recent jobs via the Jobs API
-  - `browser.py` lists datasets/tables and formats details for the browser pane
-- `src/qmb/tui/app.py` — Textual app with vim-style keybindings, inline bottom pickers, browser pane, and nvim integration.
-- `src/qmb/types.py` — shared dataclasses and enums (`QueryRequest`, `ResolvedQuery`, `QueryResultHandle`, `PageResult`, `InputMode`, `ExportFormat`).
+- `src/qmb/cli.py` — Typer entrypoint. Parses flags, builds a `QueryRequest`,
+  picks resolvers, calls the application layer, hands the outcome to a
+  formatter. Owns the structured JSON error handler.
+- `src/qmb/application/` — pure orchestration (no Typer, no Textual):
+  `pipeline.py` (`run_query_pipeline`), `resolver.py`, `protocols.py`
+  (`SqlResolver`), `outcomes.py` (`ExecutionOutcome`).
+- `src/qmb/formatters/` — the only place that turns an `ExecutionOutcome`
+  into stdout: `json_fmt.py`, `csv_fmt.py`, `table_fmt.py`, `tui_fmt.py`.
+- `src/qmb/errors.py` — `emit_json_error()` + exit-code constants.
+- `src/qmb/sql/` — plain SQL and `.sql` file loading; `PlainSqlResolver`.
+- `src/qmb/dbt/` — manifest discovery/loading, model selection, `ref` /
+  `source` / `var` resolution; `DbtSqlResolver`.
+- `src/qmb/bigquery/` — thin adapters over the BigQuery SDK: `client.py`,
+  `executor.py`, `pager.py`, `exporters.py`, `history.py`, `catalog.py`,
+  `catalog_search.py`, `catalog_format.py`.
+- `src/qmb/jobs/` — local query archive: `store.py`, `models.py`,
+  `artifacts.py`, `result_source.py`.
+- `src/qmb/tui/` — Textual app with vim-style keybindings, inline bottom
+  pickers, browser pane, history/jobs pickers, and nvim integration.
+- `src/qmb/integrations/` — editor (nvim) and clipboard helpers.
+- `src/qmb/types.py` — shared dataclasses and enums (`QueryRequest`,
+  `ResolvedQuery`, `QueryResultHandle`, `PageResult`, `InputMode`,
+  `ExportFormat`, `TableRef`, `SchemaField`).
 
-The rough dependency shape today: CLI depends on almost everything; the TUI talks directly to the BigQuery adapters; dbt sits behind its own module but is still wired into the core request shape.
+The dependency arrow points one way: `cli` → `formatters` + `application` →
+(`sql` ∪ `dbt` ∪ `bigquery` ∪ `jobs`). The TUI is a formatter; nothing in
+`application` imports `tui`. dbt is wired in only via the `SqlResolver`
+protocol — the core never imports `qmb.dbt`.
 
-## TUI Keyboard Shortcuts
+## TUI keyboard shortcuts
+
+The TUI is opt-in via `-t` / `--tui` (or `qmb jobs open <id>`). Inside, the
+keybindings are vim-style.
 
 ### Navigation
 

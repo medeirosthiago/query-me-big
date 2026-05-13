@@ -445,23 +445,33 @@ what that flag used to mean).
   `to_api_repr()` for full REST-API fidelity
 - [x] README, command table, and examples updated for every command
 
-### Phase 10D — Errors + exit codes
+### Phase 10C — Errors + exit codes
 
-- [ ] When the active format is `json`, errors go to stderr as
+- [x] Failures go to stderr as
   `{"error": {"type": "...", "message": "...", "details": {...}}}`
-- [ ] Standard exit codes: `0` success, `1` user error (Typer `BadParameter`),
-  `2` BigQuery / GCP error, `3` archive/IO error, `130` Ctrl-C
-- [ ] Surface archive failures explicitly in the JSON output
-  - `"archive": {"qmb_job_id": null, "error": "..."}` rather than silent skip
-- [ ] Tests for stderr shape and exit codes
+  (always JSON; consistent with the "JSON by default everywhere" policy)
+- [x] Standard exit codes wired through `qmb.errors`:
+  `0` ok, `1` user error, `2` engine/internal error, `3` IO/archive (reserved),
+  `130` interrupted (Ctrl-C). Pinned in `tests/test_cli_errors.py`.
+- [x] Surface archive failures explicitly in the JSON `archive` block of
+  `qmb run`: `{"qmb_job_id": null, "error": "OSError: Disk full"}`. The
+  pipeline records the error when `ignore_archive_errors=True` and the
+  formatter exposes it.
+- [x] Tests for stderr shape (`test_cli_errors.py`, 14 cases including
+  KeyboardInterrupt via Typer's `Exit(130)` quirk) and pipeline archive
+  surfacing (`test_job_archive_pipeline.py`, +2 cases).
 
-### Phase 10E — Agent-friendly metadata (pulled from 9C)
+### Phase 10D — Agent-friendly metadata
 
-- [ ] Add `--session-id` and `--parent-job-id` flags on `run`
-- [ ] Persist them in `metadata.json` (already nullable in the model)
-- [ ] Include them in the JSON `archive` block on stdout
-- [ ] `qmb jobs list --session-id X` filter
-- [ ] Defer tree/graph navigation UI to a later phase
+- [x] `--session-id` and `--parent-job-id` flags on `qmb run`
+- [x] Persisted in `metadata.json` via the existing nullable fields on
+  `JobRecord`; pipeline forwards them to `JobStore.create()`
+- [x] Included in the JSON `archive` block on stdout
+- [x] `qmb jobs list --session-id X`, `--parent-job-id Y`, and `--limit N`
+  filters
+- [x] Tree/graph navigation UI deferred to a later phase as planned
+- [x] 6 new tests in `tests/test_session_metadata.py` covering both the
+  run-side propagation (CLI → archive → JSON) and the jobs-list filters
 
 ### Why this matters
 
@@ -488,4 +498,4 @@ A pragmatic, low-risk order to actually do this work:
 7. Phase 7 — tighten domain types
 8. Phase 8 — dbt as resolver behind an interface
 9. Phase 9 — anything left, only if/when needed
-10. Phase 10 — CLI-first / headless mode (long-term goal)
+10. Phase 10 — CLI-first / headless mode — **done**
