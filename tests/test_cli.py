@@ -100,6 +100,9 @@ def test_default_run_group_routes_positional_to_run(monkeypatch) -> None:
 
 
 def test_default_run_group_routes_history_command(monkeypatch) -> None:
+    """`qmb history` is headless: prints a JSON array on stdout."""
+    import json as _json
+
     monkeypatch.setattr(
         "qmb.bigquery.client.get_client", lambda project, location: None
     )
@@ -110,7 +113,7 @@ def test_default_run_group_routes_history_command(monkeypatch) -> None:
     result = CliRunner().invoke(cli.app, ["history", "--project", "proj"])
 
     assert result.exit_code == 0, result.output
-    assert "No recent queries found" in result.output
+    assert _json.loads(result.output.strip()) == []
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -154,3 +157,84 @@ def test_explicit_run_still_works(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     request = captured["request"]
     assert request.mode == InputMode.SQL
+
+
+def test_history_json_payload_contains_entry_fields(monkeypatch) -> None:
+    """`qmb history` JSON includes every QueryHistoryEntry field."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    from qmb.bigquery.history import QueryHistoryEntry
+
+    entries = [
+        QueryHistoryEntry(
+            job_id="job-abc",
+            project="proj",
+            location="US",
+            created=datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC),
+            query="SELECT 1",
+            bytes_processed=2048,
+            state="DONE",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "qmb.bigquery.client.get_client", lambda project, location: None
+    )
+    monkeypatch.setattr(
+        "qmb.bigquery.history.list_recent_queries", lambda client, days, limit: entries
+    )
+
+    result = CliRunner().invoke(cli.app, ["history"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    assert payload == [
+        {
+            "job_id": "job-abc",
+            "project": "proj",
+            "location": "US",
+            "created": "2026-04-01T12:00:00+00:00",
+            "query": "SELECT 1",
+            "bytes_processed": 2048,
+            "state": "DONE",
+        }
+    ]
+
+
+def test_history_tui_flag_opens_the_picker(monkeypatch) -> None:
+    """`qmb history -t` opens the Textual picker instead of printing JSON."""
+    monkeypatch.setattr(
+        "qmb.bigquery.client.get_client",
+        lambda project, location: type("FC", (), {"project": "proj"})(),
+    )
+    from datetime import UTC, datetime
+
+    from qmb.bigquery.history import QueryHistoryEntry
+
+    monkeypatch.setattr(
+        "qmb.bigquery.history.list_recent_queries",
+        lambda client, days, limit: [
+            QueryHistoryEntry(
+                job_id="j",
+                project="p",
+                location="US",
+                created=datetime(2026, 1, 1, tzinfo=UTC),
+                query="select 1",
+            )
+        ],
+    )
+
+    captured: dict = {}
+
+    def fake_init(self, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fake_init)
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.run", lambda self: None)
+
+    result = CliRunner().invoke(cli.app, ["history", "-t"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["source_label"] == "history"
+    assert len(captured["history_entries"]) == 1

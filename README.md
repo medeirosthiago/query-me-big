@@ -181,12 +181,12 @@ In browser-only mode, qmb opens straight into the left-side browser pane and use
 
 ### Query history
 
-Browse recent BigQuery jobs (from the Jobs API) in the TUI:
+Browse recent BigQuery jobs (from the Jobs API) as JSON by default, or in the TUI with `-t`:
 
 ```bash
-qmb history
-qmb history --days 14 --limit 300
-qmb history --project my-project --location US
+qmb history                            # JSON array on stdout
+qmb history --days 14 --limit 300 | jq '.[].job_id'
+qmb history --project my-project --location US -t   # interactive picker
 ```
 
 Inside the TUI, press `H` to open the BigQuery history picker at any time. Selecting an entry opens the job's SQL in nvim (read-only).
@@ -212,7 +212,7 @@ qmb jobs open <job>                 # open the preview in the TUI
 |---|---|
 | `qmb run` | Run a BigQuery query (also the default when no subcommand is given) |
 | `qmb browse` | Open the dataset/table browser without running a query |
-| `qmb history` | Browse recent BigQuery query history in the TUI |
+| `qmb history` | Print recent BigQuery jobs as JSON (or open the picker with `-t`) |
 | `qmb jobs list` | List local qmb job archives |
 | `qmb jobs show <job>` | Show metadata for a local qmb job |
 | `qmb jobs sql <job>` | Print the archived resolved SQL for a local qmb job |

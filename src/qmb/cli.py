@@ -14,6 +14,7 @@ from typer.core import TyperGroup
 
 if TYPE_CHECKING:
     from qmb.application.outcomes import ExecutionOutcome
+    from qmb.bigquery.history import QueryHistoryEntry
     from qmb.formatters import Format
     from qmb.types import QueryRequest
 
@@ -308,24 +309,41 @@ def history(
         int,
         typer.Option("--page-size", help="Rows per page in TUI"),
     ] = 200,
+    tui: Annotated[
+        bool,
+        typer.Option(
+            "--tui",
+            "-t",
+            help="Open the interactive history picker instead of printing JSON",
+        ),
+    ] = False,
 ) -> None:
-    """Browse recent BigQuery query history."""
+    """Browse recent BigQuery query history.
+
+    Prints recent BigQuery jobs as a JSON array on stdout by default.
+    Pass ``-t`` / ``--tui`` to open the interactive picker instead.
+    """
     from qmb.bigquery.client import get_client
     from qmb.bigquery.history import list_recent_queries
+
+    client = get_client(project, location)
+    entries = list_recent_queries(client, days=days, limit=limit)
+
+    if not tui:
+        payload = [_history_entry_to_dict(entry) for entry in entries]
+        typer.echo(json.dumps(payload, default=str))
+        return
+
     from qmb.tui.app import QueryResultApp
     from qmb.types import QueryResultHandle
 
-    client = get_client(project, location)
-    console.print(f"[dim]Fetching query history (last {days} days)...[/dim]")
-
-    entries = list_recent_queries(client, days=days, limit=limit)
     if not entries:
         console.print("[yellow]No recent queries found.[/yellow]")
         return
 
     console.print(f"[green]✓[/green] Found {len(entries)} recent queries")
 
-    tui = QueryResultApp(
+    app_instance = QueryResultApp(
         bq_client=client,
         handle=QueryResultHandle(
             job_id="",
@@ -341,7 +359,19 @@ def history(
         browser_only=False,
         history_entries=entries,
     )
-    tui.run()
+    app_instance.run()
+
+
+def _history_entry_to_dict(entry: QueryHistoryEntry) -> dict[str, Any]:
+    return {
+        "job_id": entry.job_id,
+        "project": entry.project,
+        "location": entry.location,
+        "created": entry.created.isoformat() if entry.created else None,
+        "query": entry.query,
+        "bytes_processed": entry.bytes_processed,
+        "state": entry.state,
+    }
 
 
 @jobs_app.command("list")
