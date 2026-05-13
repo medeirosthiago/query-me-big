@@ -237,14 +237,117 @@ Only after the application layer is explicit.
 
 ---
 
-## Phase 9 — Future / Optional
+## Phase 9 — Local Job Archive and History Navigation
 
-Not required for the immediate cleanup, but worth tracking.
+Goal: make every qmb-run query available later by qmb-owned job ID, with the
+resolved SQL and a local result preview saved in an engine-independent archive.
+This is the first step toward result navigation, nvim integration, and future
+session/tree workflows.
 
+Decision for this phase:
+
+- Build a **flat local job archive** first.
+- Do **not** implement fork/tree/session UI yet.
+- Use a qmb-owned job ID independent from BigQuery job IDs.
+- Store JSONL as the default internal row format.
+- Keep Parquet as an explicit export / future archive option, not the default.
+- Include future-proof metadata fields such as `session_id` and
+  `parent_job_id`, but leave them `null` for now.
+
+Suggested archive shape:
+
+```text
+~/.qmb/jobs/<qmb_job_id>/
+  metadata.json      # qmb job ID, engine metadata, source metadata, stats
+  query.sql          # exact resolved SQL executed
+  schema.json        # result schema
+  preview.jsonl      # first N rows for fast browsing / nvim preview
+  result.jsonl       # optional full result archive, not required initially
+```
+
+### Phase 9A — TDD: write failing tests first
+
+Before implementing the archive, add focused tests that describe the intended
+behavior. After the tests are written, review/share the test plan, then make
+them pass in small implementation steps.
+
+- [x] Add storage/model tests for the local job archive
+  - Proposed file: `tests/test_job_store.py`
+  - Covers qmb job ID generation with injected clock/randomness
+  - Writes `metadata.json`, `query.sql`, `schema.json`, and `preview.jsonl`
+  - Reads a stored job record back from disk
+  - Lists jobs sorted newest first
+  - Resolves full or unambiguous partial qmb job IDs
+  - Handles missing/corrupt job directories predictably
+- [x] Add JSONL artifact tests
+  - Proposed file: `tests/test_job_artifacts.py`
+  - Streams row dictionaries to JSONL without building one large JSON array
+  - Uses qmb/BigQuery JSON coercion for dates, datetimes, decimals, bytes, etc.
+  - Preserves schema column order where applicable
+  - Reads preview rows back for CLI/TUI/nvim consumers
+- [x] Add pipeline persistence tests
+  - Proposed file: `tests/test_job_archive_pipeline.py`
+  - Successful non-dry-run executions create a local qmb job archive entry
+  - Dry runs do not archive results, or archive only dry-run metadata if we
+    explicitly decide to support that
+  - Archive metadata records `engine="bigquery"`, BigQuery job ID, project,
+    location, bytes processed, row count, source label, and timestamps
+  - Archive saves the resolved SQL after dbt/plain resolution and `--where`
+    wrapping
+  - Export behavior remains separate from history archive behavior
+- [x] Add CLI command tests for historical jobs
+  - Proposed file: `tests/test_jobs_cli.py`
+  - `qmb jobs list` shows local qmb jobs, not remote BigQuery history
+  - `qmb jobs list --format json` returns machine-readable records
+  - `qmb jobs show <job>` returns job metadata
+  - `qmb jobs sql <job>` prints the archived resolved SQL
+  - `qmb jobs paths <job> --format json` returns paths for nvim integration
+- [x] Add a first archived-result navigation test
+  - Proposed file: `tests/test_archived_results.py`
+  - Opens or pages from `preview.jsonl` without calling BigQuery
+  - Establishes the future `ResultSource` boundary, even if only JSONL preview
+    is supported initially
+
+### Phase 9B — Make the tests pass incrementally
+
+- [x] Introduce a small history/archive package
+  - Implemented as `qmb.jobs`
+  - Types: `JobRecord`, `EngineMetadata`, `SourceMetadata`
+  - Store: `JobStore` with `create`, `read`, `list`, `resolve_id`
+  - CLI run archives are best-effort so a successful query is not failed by
+    local history write issues
+- [x] Add JSONL artifact helpers
+  - Write/read preview rows
+  - Reuse or centralize JSON serialization already used by BigQuery exporters
+- [x] Hook archive creation into `run_query_pipeline`
+  - Keep it application-layer, not TUI-layer
+  - Archive after successful execution
+  - Keep explicit user exports independent from archive writes
+- [x] Add `qmb jobs` CLI subcommands
+  - `qmb jobs list`
+  - `qmb jobs show <job>`
+  - `qmb jobs sql <job>`
+  - `qmb jobs paths <job>`
+  - Prefer JSON-capable output to support Phase 10 and nvim integration
+- [x] Add minimal archived-result reading
+  - Start with `preview.jsonl`
+  - Keep full `result.jsonl` / Parquet archive support for later unless needed
+
+### Phase 9C — Later, not now
+
+- [ ] Full result archive policy/config
+  - `none | preview | full | auto`
+  - row/byte caps and retention
+  - optional Parquet archive format
+- [ ] Session / tree / fork navigation
+  - Build on top of flat jobs using `session_id` and `parent_job_id`
+  - Needed for query re-execution and branch-style history replay (see
+    `TODO.md`)
+- [ ] nvim plugin/workflow
+  - Populate quickfix/location list from `qmb jobs list --format json`
+  - Open `query.sql` and `preview.jsonl`/result side-by-side
 - [ ] Reconsider whether dbt becomes a true plugin/extension boundary
   - Discoverable via entry points or explicit registration
-- [ ] Session / result navigation architecture
-  - Needed for query re-execution and history replay (see `TODO.md`)
 - [ ] Result-set-wide search (instead of page-local)
 - [ ] Reconsider browser indexing strategy for very large projects
 
