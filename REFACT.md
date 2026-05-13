@@ -426,24 +426,24 @@ pure addition.
   - `tests/test_cli_flow.py` — 5 new cases for `--format json`, `--format csv`,
     dry-run JSON, invalid format, and `--format tui` overriding `--no-tui`
 
-### Phase 10B — Flip default to TTY-aware
+### Phase 10B — Headless by default everywhere
 
-- [ ] When no `--format` is given and stdout is not a TTY, default to `json`
-- [ ] When no `--format` is given and stdout is a TTY, default to `tui` (today)
-- [ ] `--no-tui` → emits `DeprecationWarning` and acts as `--format table`
-- [ ] Update README to document the new default policy
+Policy decision: JSON is the default for every command; the TUI is
+opt-in only via `-t` / `--tui`. No TTY detection, no implicit TUI
+launches. `--no-tui` is removed entirely (the default now matches
+what that flag used to mean).
 
-### Phase 10C — Headless mode for the rest of the commands
-
-- [ ] `qmb history --format json` (today: TUI only)
-  - Reuse `JsonFormatter` for the history list
-  - Filters: `--since`, `--limit`, `--project`
-- [ ] `qmb browse [<pattern>] --format json` (today: TUI only, implicit)
-  - Headless catalog query → JSON datasets/tables
-  - TUI only when `--format tui` or stdout is a TTY and no `--format`
-- [ ] New `qmb describe <dataset[.table]>` → metadata as JSON
-  - Use the existing `bigquery/catalog.py` + `catalog_format.py` helpers
-- [ ] `qmb --model orders` (already covered by Phase 10A/B, called out for docs)
+- [x] `qmb run`: default `--format` flipped to `json`; add `-t/--tui`;
+  remove `--no-tui`
+- [x] `qmb history`: default = JSON array of recent jobs on stdout;
+  add `-t/--tui` to open the existing picker
+- [x] `qmb browse [<pattern>]`: default = JSON catalog listing
+  (datasets without a pattern; matches with one); add positional
+  pattern arg; add `-t/--tui` to open the browser pane
+- [x] New `qmb describe <dataset[.table]>`: dataset or table metadata
+  as JSON, mirroring `bq show --format prettyjson`. Uses the SDK's
+  `to_api_repr()` for full REST-API fidelity
+- [x] README, command table, and examples updated for every command
 
 ### Phase 10D — Errors + exit codes
 
