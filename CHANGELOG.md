@@ -12,9 +12,13 @@ behavior changes are called out explicitly).
 ### Added
 - TUI jobs picker: press `J` inside the TUI to browse the local qmb job
   archive (`~/.qmb/jobs/`). Selecting a job swaps the current view to that
-  job's preview without re-running the query. Filter matches the source
-  label, full or short qmb job ID, and the date string.
-- New module `qmb.tui.jobs_picker` (`JobsController`).
+  job's preview without re-running the query. Each row shows the date, row
+  count, bytes processed, source label, short job ID, and the first part of
+  the resolved SQL. The filter matches the source label, full or short qmb
+  job ID, the date string, and the SQL text.
+- New module `qmb.tui.jobs_picker` (`JobsController`); SQL excerpts are
+  read lazily from each job's `query.sql` and cached per job ID, so the
+  picker stays responsive across filter keystrokes.
 
 ### Changed
 - **TUI keybinding rebound**: BigQuery query history moved from `r` to `H`

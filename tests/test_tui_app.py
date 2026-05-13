@@ -573,6 +573,7 @@ def _make_job_record(
     label: str = "model: orders",
     schema: list[QmbSchemaField] | None = None,
     rows: list[dict] | None = None,
+    sql: str = "select 1 as id",
 ) -> JobRecord:
     """Build an on-disk job archive directory and return its JobRecord."""
     from qmb.jobs.artifacts import write_jsonl_rows
@@ -582,7 +583,7 @@ def _make_job_record(
 
     directory = tmp_path / qmb_job_id
     directory.mkdir(parents=True)
-    (directory / "query.sql").write_text("select 1 as id", encoding="utf-8")
+    (directory / "query.sql").write_text(sql, encoding="utf-8")
     (directory / "schema.json").write_text("[]", encoding="utf-8")
     write_jsonl_rows(directory / "preview.jsonl", rows, fieldnames=[f.name for f in schema])
 
@@ -624,6 +625,8 @@ def test_jobs_picker_opens_via_J(monkeypatch, tmp_path) -> None:
             assert "model: orders" in label
             assert "a1b2c3" in label
             assert "2 rows" in label
+            # SQL excerpt appears after the source-label tag.
+            assert "select 1 as id" in label
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
     asyncio.run(run())
@@ -764,6 +767,105 @@ def test_jobs_picker_warns_when_archive_empty(monkeypatch, tmp_path) -> None:
 
             assert app.query_one("#jobs-picker").display is False
             assert warned == ["No archived qmb jobs found"]
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_shows_sql_excerpt_and_collapses_whitespace(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        record = _make_job_record(
+            tmp_path,
+            sql="SELECT id,\n       name\nFROM `proj.ds.orders`\nWHERE status = 'shipped'",
+        )
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(200, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [record]
+            app._jobs.open()
+            await pilot.pause()
+
+            opt = app.query_one("#jobs-list", OptionList)
+            label = opt.get_option_at_index(0).prompt
+            assert "SELECT id, name FROM `proj.ds.orders` WHERE status = 'shipped'" in label
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_filters_by_sql_text(monkeypatch, tmp_path) -> None:
+    async def run() -> None:
+        r1 = _make_job_record(
+            tmp_path,
+            qmb_job_id="qmb_2026-05-13_13-04-32_a1b2c3",
+            label="ad-hoc",
+            sql="SELECT * FROM orders",
+        )
+        r2 = _make_job_record(
+            tmp_path,
+            qmb_job_id="qmb_2026-05-13_13-05-00_ff9999",
+            label="ad-hoc",
+            sql="SELECT id, email FROM users",
+        )
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(200, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [r1, r2]
+            app._jobs.open()
+            await pilot.pause()
+
+            inp = app.query_one("#jobs-filter", Input)
+
+            inp.value = "users"  # matches SQL only, not label
+            await pilot.pause()
+            opt = app.query_one("#jobs-list", OptionList)
+            assert opt.option_count == 1
+            assert "users" in opt.get_option_at_index(0).prompt
+
+            inp.value = "email"  # also SQL-only
+            await pilot.pause()
+            assert app.query_one("#jobs-list", OptionList).option_count == 1
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+def test_jobs_picker_caches_sql_reads(monkeypatch, tmp_path) -> None:
+    """populate() should only read each job's query.sql once."""
+    async def run() -> None:
+        record = _make_job_record(tmp_path, sql="select 1 as id")
+        original_read_text = Path.read_text
+        read_counts: dict[str, int] = {}
+
+        def counting_read_text(self, *args, **kwargs):
+            if self.name == "query.sql":
+                read_counts[str(self)] = read_counts.get(str(self), 0) + 1
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(200, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._jobs.records = [record]
+            app._jobs.open()
+            await pilot.pause()
+
+            inp = app.query_one("#jobs-filter", Input)
+            inp.value = "s"
+            await pilot.pause()
+            inp.value = "se"
+            await pilot.pause()
+            inp.value = "sel"
+            await pilot.pause()
+
+            reads = read_counts.get(str(record.query_path), 0)
+            assert reads == 1, f"expected 1 read, got {reads}"
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
     asyncio.run(run())

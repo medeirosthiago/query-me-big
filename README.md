@@ -204,7 +204,7 @@ qmb jobs paths <job> --format json  # absolute paths for editor integrations
 qmb jobs open <job>                 # open the preview in the TUI
 ```
 
-`<job>` accepts a full ID (`qmb_2026-05-13_13-04-32_a1b2c3`) or any unambiguous substring. Inside the TUI, press `J` to open the archived-jobs picker and switch the current view to any job's preview without re-running the query.
+`<job>` accepts a full ID (`qmb_2026-05-13_13-04-32_a1b2c3`) or any unambiguous substring. Inside the TUI, press `J` to open the archived-jobs picker and switch the current view to any job's preview without re-running the query. Each row shows the date, row count, bytes processed, source label, short job ID, and the first part of the resolved SQL. The filter matches against any of these (including SQL text), so you can search for `users` or `model: orders` and narrow the list.
 
 ## Commands
 

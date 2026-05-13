@@ -26,6 +26,9 @@ class JobsController:
         self.app = app
         self.records: list[JobRecord] = []
         self.filtered_indices: list[int] = []
+        # qmb_job_id -> whitespace-collapsed SQL, cached so populate()
+        # doesn't re-read query.sql every filter keystroke.
+        self._sql_cache: dict[str, str] = {}
 
     # -- load --------------------------------------------------------------
 
@@ -65,6 +68,7 @@ class JobsController:
             label = record.source.label
             job_id = record.qmb_job_id
             short_id = job_id.rsplit("_", 1)[-1]
+            sql = self._sql_excerpt(record)
             if q and not any(
                 q in s
                 for s in (
@@ -72,6 +76,7 @@ class JobsController:
                     job_id.lower(),
                     short_id.lower(),
                     date_str,
+                    sql.lower(),
                 )
             ):
                 continue
@@ -79,14 +84,32 @@ class JobsController:
                 f"{date_str} · {record.total_rows:,} rows · "
                 f"{fmt_bytes(record.bytes_processed)} · "
             )
-            remaining = max(avail - len(prefix), 20)
-            tail = f"{label} [{short_id}]"
-            if len(tail) > remaining:
-                tail = tail[: remaining - 3] + "..."
-            opt.add_option(f"{prefix}{tail}")
+            tag = f"{label} [{short_id}]"
+            sql_part = f" · {sql}" if sql else ""
+            full = f"{prefix}{tag}{sql_part}"
+            if len(full) > avail:
+                full = full[: max(avail - 3, 20)] + "..."
+            opt.add_option(full)
             self.filtered_indices.append(i)
         if self.filtered_indices:
             opt.highlighted = 0
+
+    def _sql_excerpt(self, record: JobRecord, max_chars: int = 500) -> str:
+        """Return a whitespace-collapsed SQL excerpt for display/filter.
+
+        Reads ``query.sql`` lazily and caches the result by job ID so we
+        only hit the filesystem once per job, even across filter keystrokes.
+        """
+        cached = self._sql_cache.get(record.qmb_job_id)
+        if cached is not None:
+            return cached
+        try:
+            text = record.query_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        normalized = " ".join(text.split())[:max_chars]
+        self._sql_cache[record.qmb_job_id] = normalized
+        return normalized
 
     # -- input handlers ----------------------------------------------------
 
