@@ -402,8 +402,7 @@ itself means interactive.
 
 ## Architecture
 
-Layered, CLI-first. The TUI is one renderer among several. See
-[`REVIEW.md`](REVIEW.md) and [`REFACT.md`](REFACT.md) for the full notes.
+Layered, CLI-first. The TUI is one renderer among several.
 
 - `src/qmb/cli.py` — Typer entrypoint. Parses flags, builds a `QueryRequest`,
   picks resolvers, calls the application layer, hands the outcome to a
