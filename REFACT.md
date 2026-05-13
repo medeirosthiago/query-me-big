@@ -371,57 +371,97 @@ them pass in small implementation steps.
 
 ---
 
-## Phase 10 — CLI-First / Headless Mode (Long-term Goal)
+## Phase 10 — CLI-First / Headless Mode
 
-Only after Phases 1–8.
-
-After the previous phases, qmb's architecture is decoupled enough that the
-TUI is no longer the default — it becomes one of several renderers.
+After Phases 1–9 the architecture is decoupled enough that the TUI is no
+longer the only sink — it becomes one renderer among many.
 
 Goal: qmb is usable headlessly by humans in scripts, by agents, and by LLMs.
 The TUI is an opt-in mode for interactive / editor-style use.
 
 ### Behavior target
 
-- Default output is structured **JSON** to stdout
-- `--format csv` switches to CSV output
-- `--format tui` (or `--tui`) opens the existing Textual app
-- All errors go to stderr in a structured shape
+- `qmb` returns structured **JSON** by default when stdout is not a TTY
+- `qmb` opens the Textual TUI by default when stdout *is* a TTY (current UX)
+- `--format {json,csv,table,tui}` overrides the default explicitly
+- All errors go to stderr in a structured shape (matching the active format)
 - Exit codes are predictable for scripting
-- No command opens the TUI implicitly
+- No command opens the TUI implicitly when `--format` is non-`tui`
 
-### Features that become headless by default
+### Policy decisions for this phase
 
-- [ ] Query execution
-  - `qmb "SELECT ..."` prints rows as JSON
-  - `--format csv` for CSV
-- [ ] Dry runs
-  - `qmb --dry-run "SELECT ..."` prints estimated bytes + status as JSON
-- [ ] Query history
-  - `qmb history` prints recent jobs as JSON
-  - Supports filters (e.g. `--since`, `--limit`, `--project`)
-- [ ] Browse datasets and tables
-  - `qmb browse <pattern>` prints matching datasets/tables as JSON
-  - No TUI unless explicitly requested
-- [ ] Inspect dataset / table details
-  - `qmb describe <dataset>` or `qmb describe <dataset.table>` prints metadata as JSON
-- [ ] dbt model resolution
-  - `qmb --model orders --no-tui` prints results as JSON by default
+- **Default policy** = TTY-aware: piped → json, interactive terminal → tui.
+  Agents and pipelines therefore just call `qmb "SELECT ..."` and get JSON.
+  Humans get the TUI as before.
+- **`--no-tui` stays as a deprecated alias** for `--format table` for one
+  release, so existing scripts keep working.
+- **Row source for JSON/CSV** = stream from `bigquery/pager.py` (full result).
+  Cap with a new `--limit` only if it proves necessary.
+- **Full result archive remains deferred to Phase 9C.** Phase 10 keeps the
+  500-row preview archive; agents that need every row pipe stdout to a file.
+- **Session/tree fields** (`session_id`, `parent_job_id`) — wire up CLI flags
+  in 10E so agents can stitch jobs together, but no UI/navigation yet.
 
-### Implementation notes
+### Phase 10A — Foundation: formatters package + `--format` on `run`
 
-- Depends on Phase 3 (application/orchestration layer extracted from CLI)
-- Depends on Phase 6 (TUI no longer entangled with app logic)
-- Depends on Phase 7 (typed domain objects → easy to serialize)
-- Introduce `qmb/formatters/` with renderers:
-  - `json` (default)
-  - `csv`
-  - `table` (pretty terminal table, optional)
-  - `tui` (opt-in interactive)
-- A single `--format` flag selects the renderer
-- TUI becomes one renderer among many, not the default
-- Each command returns a typed result object; renderers know how to print it
-- Document the JSON schema for each command so external tools and agents can rely on it
+No default flip yet. Everything is opt-in via `--format`, so this commit is
+pure addition.
+
+- [x] Add `src/qmb/formatters/` package
+  - `base.py` — `Format` enum + `Formatter` protocol
+  - `json_fmt.py` — `JsonFormatter` (stdout JSON; rows streamed from pager)
+  - `csv_fmt.py` — `CsvFormatter` (stdout CSV; rows streamed from pager)
+  - `table_fmt.py` — `TableFormatter` (today's Rich console output)
+  - `tui_fmt.py` — `TuiFormatter` (wraps `QueryResultApp.run`)
+  - `__init__.py` — `get_formatter(fmt)` factory
+- [x] Move all `console.print` from `cli._render_outcome` into `TableFormatter`
+- [x] Add `--format` flag to `qmb run`
+  - Values: `json`, `csv`, `table`, `tui`
+  - Default: keep current (TUI launch + status lines)
+  - Explicit `--format tui` overrides `--no-tui`
+  - Explicit `--format json|csv|table` implies headless (sets `no_tui`)
+- [x] Document the JSON schema for `run` in README
+- [x] Tests
+  - `tests/test_formatters.py` — 17 unit tests, one per formatter behavior
+  - `tests/test_cli_flow.py` — 5 new cases for `--format json`, `--format csv`,
+    dry-run JSON, invalid format, and `--format tui` overriding `--no-tui`
+
+### Phase 10B — Flip default to TTY-aware
+
+- [ ] When no `--format` is given and stdout is not a TTY, default to `json`
+- [ ] When no `--format` is given and stdout is a TTY, default to `tui` (today)
+- [ ] `--no-tui` → emits `DeprecationWarning` and acts as `--format table`
+- [ ] Update README to document the new default policy
+
+### Phase 10C — Headless mode for the rest of the commands
+
+- [ ] `qmb history --format json` (today: TUI only)
+  - Reuse `JsonFormatter` for the history list
+  - Filters: `--since`, `--limit`, `--project`
+- [ ] `qmb browse [<pattern>] --format json` (today: TUI only, implicit)
+  - Headless catalog query → JSON datasets/tables
+  - TUI only when `--format tui` or stdout is a TTY and no `--format`
+- [ ] New `qmb describe <dataset[.table]>` → metadata as JSON
+  - Use the existing `bigquery/catalog.py` + `catalog_format.py` helpers
+- [ ] `qmb --model orders` (already covered by Phase 10A/B, called out for docs)
+
+### Phase 10D — Errors + exit codes
+
+- [ ] When the active format is `json`, errors go to stderr as
+  `{"error": {"type": "...", "message": "...", "details": {...}}}`
+- [ ] Standard exit codes: `0` success, `1` user error (Typer `BadParameter`),
+  `2` BigQuery / GCP error, `3` archive/IO error, `130` Ctrl-C
+- [ ] Surface archive failures explicitly in the JSON output
+  - `"archive": {"qmb_job_id": null, "error": "..."}` rather than silent skip
+- [ ] Tests for stderr shape and exit codes
+
+### Phase 10E — Agent-friendly metadata (pulled from 9C)
+
+- [ ] Add `--session-id` and `--parent-job-id` flags on `run`
+- [ ] Persist them in `metadata.json` (already nullable in the model)
+- [ ] Include them in the JSON `archive` block on stdout
+- [ ] `qmb jobs list --session-id X` filter
+- [ ] Defer tree/graph navigation UI to a later phase
 
 ### Why this matters
 
@@ -429,7 +469,9 @@ The TUI is an opt-in mode for interactive / editor-style use.
 - Usable by agents / LLMs / robots without screen scraping
 - TUI stays as a high-quality interactive mode for humans / editor use
 - Forces a clean separation between application logic and rendering
-- Naturally extends to future renderers (e.g. Markdown, NDJSON, table)
+- Naturally extends to future renderers (e.g. Markdown, NDJSON, html)
+- Combined with the Phase 9 job archive, agents get a permanent,
+  queryable record of every BigQuery interaction they make
 
 ---
 
