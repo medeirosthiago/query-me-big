@@ -9,7 +9,7 @@ from textual.widgets import Input, OptionList, Tree
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
 from qmb.tui.app import QueryResultApp
-from qmb.types import ExportFormat, PageResult, QueryResultHandle
+from qmb.types import AgentContext, ExportFormat, PageResult, QueryResultHandle
 from qmb.types import SchemaField as QmbSchemaField
 
 
@@ -574,6 +574,8 @@ def _make_job_record(
     schema: list[QmbSchemaField] | None = None,
     rows: list[dict] | None = None,
     sql: str = "select 1 as id",
+    session_id: str | None = None,
+    agent_context: AgentContext | None = None,
 ) -> JobRecord:
     """Build an on-disk job archive directory and return its JobRecord."""
     from qmb.jobs.artifacts import write_jsonl_rows
@@ -600,13 +602,15 @@ def _make_job_record(
         query_path=directory / "query.sql",
         schema_path=directory / "schema.json",
         preview_path=directory / "preview.jsonl",
+        session_id=session_id,
+        agent_context=agent_context,
         schema=schema,
     )
 
 
 def test_jobs_picker_opens_via_J(monkeypatch, tmp_path) -> None:
     async def run() -> None:
-        record = _make_job_record(tmp_path)
+        record = _make_job_record(tmp_path, session_id="pi-session-42")
 
         app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
 
@@ -625,6 +629,7 @@ def test_jobs_picker_opens_via_J(monkeypatch, tmp_path) -> None:
             assert "model: orders" in label
             assert "a1b2c3" in label
             assert "2 rows" in label
+            assert "session:pi-session-42" in label
             # SQL excerpt appears after the source-label tag.
             assert "select 1 as id" in label
 
@@ -638,6 +643,7 @@ def test_jobs_picker_filters_by_text(monkeypatch, tmp_path) -> None:
             tmp_path,
             qmb_job_id="qmb_2026-05-13_13-04-32_a1b2c3",
             label="model: orders",
+            session_id="agent-orders-debug",
         )
         r2 = _make_job_record(
             tmp_path,
@@ -659,6 +665,10 @@ def test_jobs_picker_filters_by_text(monkeypatch, tmp_path) -> None:
             assert app.query_one("#jobs-list", OptionList).option_count == 1
 
             inp.value = "a1b2c3"
+            await pilot.pause()
+            assert app.query_one("#jobs-list", OptionList).option_count == 1
+
+            inp.value = "agent-orders"
             await pilot.pause()
             assert app.query_one("#jobs-list", OptionList).option_count == 1
 

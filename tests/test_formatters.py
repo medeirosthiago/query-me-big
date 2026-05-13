@@ -6,8 +6,6 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
-from tests.test_bigquery_flow import FakeBigQueryClient, FakeSchemaField
-
 from qmb.application.outcomes import ExecutionOutcome
 from qmb.application.resolver import ResolutionTrace
 from qmb.formatters import (
@@ -20,6 +18,7 @@ from qmb.formatters import (
 from qmb.formatters.tui_fmt import TuiFormatter
 from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
 from qmb.types import QueryRequest, QueryResultHandle, ResolvedQuery
+from tests.test_bigquery_flow import FakeBigQueryClient, FakeSchemaField
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -159,6 +158,7 @@ def test_json_formatter_emits_full_payload_with_rows() -> None:
         "qmb_job_id": None,
         "session_id": None,
         "parent_job_id": None,
+        "agent": None,
         "error": None,
     }
     assert payload["export"] is None
@@ -196,6 +196,7 @@ def test_json_formatter_includes_archive_and_export_when_present(tmp_path) -> No
         "qmb_job_id": "20260101T120000-abc12345",
         "session_id": None,
         "parent_job_id": None,
+        "agent": None,
         "error": None,
     }
     assert payload["export"] == {"path": str(tmp_path / "out.csv"), "rows": 2}

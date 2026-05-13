@@ -159,6 +159,7 @@ def _archive_job(
         execution_seconds=handle.execution_seconds,
         session_id=request.session_id,
         parent_job_id=request.parent_job_id,
+        agent_context=request.agent_context,
     )
 
 

@@ -170,3 +170,159 @@ def test_jobs_list_no_matches_returns_empty_json(monkeypatch, tmp_path: Path) ->
 
     assert result.exit_code == 0, result.output + result.stderr
     assert json.loads(result.output.strip()) == []
+
+
+# ---------------------------------------------------------------------------
+# `qmb jobs sessions`
+# ---------------------------------------------------------------------------
+
+
+def test_jobs_sessions_json_groups_sessions_newest_first(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from collections.abc import Iterator
+    from datetime import UTC, datetime
+
+    from qmb.jobs.models import EngineMetadata, SourceMetadata
+    from qmb.jobs.store import JobStore
+    from qmb.types import AgentContext, SchemaField
+
+    def next_value(values: list):
+        iterator: Iterator = iter(values)
+        return lambda: next(iterator)
+
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    store = JobStore(
+        now=next_value(
+            [
+                datetime(2026, 5, 13, 10, 0, tzinfo=UTC),
+                datetime(2026, 5, 13, 11, 0, tzinfo=UTC),
+                datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+                datetime(2026, 5, 13, 13, 0, tzinfo=UTC),
+            ]
+        ),
+        nonce=next_value(["aaaaaa", "bbbbbb", "cccccc", "dddddd"]),
+    )
+    common = {
+        "schema": [SchemaField("x", "INTEGER")],
+        "preview_rows": [{"x": 1}],
+        "source": SourceMetadata(label="ad-hoc", input_mode="sql"),
+        "engine": EngineMetadata(name="bigquery"),
+        "total_rows": 1,
+    }
+    store.create(
+        resolved_sql="SELECT 1",
+        session_id="alpha",
+        agent_context=AgentContext(name="pi", session_id="alpha", task="debug alpha"),
+        **common,
+    )
+    store.create(resolved_sql="SELECT 2", session_id="beta", **common)
+    store.create(
+        resolved_sql="SELECT 3",
+        session_id="alpha",
+        agent_context=AgentContext(name="codex", session_id="alpha"),
+        **common,
+    )
+    store.create(resolved_sql="SELECT 4", **common)
+
+    result = _runner().invoke(cli.app, ["jobs", "sessions", "--format", "json"])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output)
+    assert payload == [
+        {
+            "session_id": "alpha",
+            "count": 2,
+            "first": "2026-05-13T10:00:00+00:00",
+            "latest": "2026-05-13T12:00:00+00:00",
+            "agents": ["codex", "pi"],
+            "tasks": ["debug alpha"],
+        },
+        {
+            "session_id": "beta",
+            "count": 1,
+            "first": "2026-05-13T11:00:00+00:00",
+            "latest": "2026-05-13T11:00:00+00:00",
+            "agents": [],
+            "tasks": [],
+        },
+    ]
+
+
+def test_jobs_sessions_text_and_limit(monkeypatch, tmp_path: Path) -> None:
+    _seed_jobs(monkeypatch, tmp_path, session_ids=["a", "b", "a"])
+
+    result = _runner().invoke(cli.app, ["jobs", "sessions", "--limit", "1"])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert len(result.output.strip().splitlines()) == 1
+    assert "jobs" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Agent metadata
+# ---------------------------------------------------------------------------
+
+
+def test_run_env_session_and_agent_metadata_persist(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Agent/session context is collected from env + flags and archived."""
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: fake_client)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("QMB_SESSION_ID", "pi-session-env")
+    monkeypatch.setenv("QMB_AGENT_NAME", "pi")
+    monkeypatch.setenv("QMB_AGENT_CONVERSATION_ID", "conversation-1")
+    monkeypatch.setenv("QMB_AGENT_TASK", "debug orders discrepancy")
+    monkeypatch.setenv("QMB_AGENT_TAGS", "env-tag,orders")
+    monkeypatch.setenv("QMB_AGENT_META_JSON", '{"env_key": "env-value", "priority": 1}')
+    monkeypatch.chdir(tmp_path)
+
+    result = _runner().invoke(
+        cli.app,
+        [
+            "run",
+            "SELECT 1",
+            "--agent-run-id",
+            "run-1",
+            "--agent-turn-id",
+            "turn-2",
+            "--tag",
+            "orders",
+            "--tag",
+            "investigation",
+            "--meta",
+            "priority=2",
+            "--meta",
+            "manual=true",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    archive = payload["archive"]
+    assert archive["session_id"] == "pi-session-env"
+    assert archive["agent"]["name"] == "pi"
+    assert archive["agent"]["session_id"] == "pi-session-env"
+    assert archive["agent"]["conversation_id"] == "conversation-1"
+    assert archive["agent"]["run_id"] == "run-1"
+    assert archive["agent"]["turn_id"] == "turn-2"
+    assert archive["agent"]["task"] == "debug orders discrepancy"
+    assert archive["agent"]["cwd"] == str(tmp_path.resolve())
+    assert archive["agent"]["repo_root"] is None
+    assert archive["agent"]["git_sha"] is None
+    assert archive["agent"]["git_dirty"] is None
+    assert archive["agent"]["tags"] == ["env-tag", "orders", "investigation"]
+    assert archive["agent"]["metadata"] == {
+        "env_key": "env-value",
+        "priority": 2,
+        "manual": True,
+    }
+
+    job_dir = next((tmp_path / "jobs").iterdir())
+    metadata = json.loads((job_dir / "metadata.json").read_text())
+    assert metadata["session_id"] == "pi-session-env"
+    assert metadata["agent"] == archive["agent"]

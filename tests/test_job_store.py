@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from qmb.types import SchemaField
+from qmb.types import AgentContext, SchemaField
 
 NOW = datetime(2026, 5, 12, 14, 33, 2, tzinfo=UTC)
 
@@ -83,11 +83,12 @@ def test_create_job_writes_metadata_sql_schema_and_preview(tmp_path: Path) -> No
 
     metadata = json.loads(record.metadata_path.read_text(encoding="utf-8"))
     assert metadata == {
-        "version": 1,
+        "version": 2,
         "qmb_job_id": "qmb_2026-05-12_14-33-02_a1b2c3",
         "created_at": "2026-05-12T14:33:02+00:00",
         "session_id": None,
         "parent_job_id": None,
+        "agent": None,
         "source": {
             "label": "ad-hoc",
             "input_mode": "sql",
@@ -133,7 +134,47 @@ def test_read_job_record_round_trips_from_disk(tmp_path: Path) -> None:
     assert loaded.total_rows == 1
     assert loaded.bytes_processed == 2048
     assert loaded.execution_seconds == 2.5
+    assert loaded.agent_context is None
     assert loaded.query_path.read_text(encoding="utf-8") == "SELECT 1 AS id"
+
+
+def test_agent_context_round_trips_from_disk(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    models, _ = _jobs_modules()
+    agent_context = AgentContext(
+        name="pi",
+        session_id="pi-session",
+        conversation_id="conversation-1",
+        run_id="run-1",
+        turn_id="turn-2",
+        task="debug orders",
+        cwd="/repo",
+        repo_root="/repo",
+        git_branch="main",
+        git_sha="abc123",
+        git_dirty=True,
+        user="mds",
+        host="host",
+        tags=["orders"],
+        metadata={"priority": 1},
+    )
+
+    created = store.create(
+        resolved_sql="SELECT 1 AS id",
+        schema=[SchemaField("id", "INTEGER")],
+        preview_rows=[{"id": 1}],
+        source=models.SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="pi-session",
+        agent_context=agent_context,
+    )
+
+    metadata = json.loads(created.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["agent"] == agent_context.to_mapping()
+
+    loaded = store.read(created.qmb_job_id)
+    assert loaded.agent_context == agent_context
 
 
 def test_list_jobs_sorts_newest_first(tmp_path: Path) -> None:

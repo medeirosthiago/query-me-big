@@ -30,6 +30,66 @@ class ExportFormat(enum.Enum):
 
 
 @dataclass(frozen=True)
+class AgentContext:
+    """Metadata about the agent/tool/session that initiated a qmb run."""
+
+    name: str | None = None
+    session_id: str | None = None
+    conversation_id: str | None = None
+    run_id: str | None = None
+    turn_id: str | None = None
+    task: str | None = None
+    cwd: str | None = None
+    repo_root: str | None = None
+    git_branch: str | None = None
+    git_sha: str | None = None
+    git_dirty: bool | None = None
+    user: str | None = None
+    host: str | None = None
+    tags: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "session_id": self.session_id,
+            "conversation_id": self.conversation_id,
+            "run_id": self.run_id,
+            "turn_id": self.turn_id,
+            "task": self.task,
+            "cwd": self.cwd,
+            "repo_root": self.repo_root,
+            "git_branch": self.git_branch,
+            "git_sha": self.git_sha,
+            "git_dirty": self.git_dirty,
+            "user": self.user,
+            "host": self.host,
+            "tags": list(self.tags),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> "AgentContext":
+        return cls(
+            name=data.get("name"),
+            session_id=data.get("session_id"),
+            conversation_id=data.get("conversation_id"),
+            run_id=data.get("run_id"),
+            turn_id=data.get("turn_id"),
+            task=data.get("task"),
+            cwd=data.get("cwd"),
+            repo_root=data.get("repo_root"),
+            git_branch=data.get("git_branch"),
+            git_sha=data.get("git_sha"),
+            git_dirty=data.get("git_dirty"),
+            user=data.get("user"),
+            host=data.get("host"),
+            tags=list(data.get("tags") or []),
+            metadata=dict(data.get("metadata") or {}),
+        )
+
+
+@dataclass(frozen=True)
 class InputSpec:
     """Describes *what* query to run (source of the SQL)."""
 
@@ -89,6 +149,7 @@ class QueryRequest:
     where: str | None = None
     session_id: str | None = None
     parent_job_id: str | None = None
+    agent_context: AgentContext | None = None
 
     @property
     def input(self) -> InputSpec:

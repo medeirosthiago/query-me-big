@@ -14,7 +14,13 @@ Schema written to stdout for ``qmb run`` (non dry-run)::
       },
       "schema": [{"name": str, "type": str, "mode": str}, ...],
       "rows":   [{<column>: <value>, ...}, ...],
-      "archive": {"qmb_job_id": str | null},
+      "archive": {
+        "qmb_job_id": str | null,
+        "session_id": str | null,
+        "parent_job_id": str | null,
+        "agent": dict | null,
+        "error": str | null
+      },
       "export":  {"path": str, "rows": int} | null,
       "dry_run": false
     }
@@ -81,6 +87,12 @@ class JsonFormatter:
             }
 
         rows = self._collect_rows(outcome)
+        archived_job = outcome.archived_job
+        archive_session_id = archived_job.session_id if archived_job else request.session_id
+        archive_parent_job_id = (
+            archived_job.parent_job_id if archived_job else request.parent_job_id
+        )
+        archive_agent = archived_job.agent_context if archived_job else request.agent_context
         return {
             "dry_run": False,
             "stats": {
@@ -95,15 +107,10 @@ class JsonFormatter:
             "schema": schema,
             "rows": rows,
             "archive": {
-                "qmb_job_id": (
-                    outcome.archived_job.qmb_job_id if outcome.archived_job else None
-                ),
-                "session_id": (
-                    outcome.archived_job.session_id if outcome.archived_job else None
-                ),
-                "parent_job_id": (
-                    outcome.archived_job.parent_job_id if outcome.archived_job else None
-                ),
+                "qmb_job_id": archived_job.qmb_job_id if archived_job else None,
+                "session_id": archive_session_id,
+                "parent_job_id": archive_parent_job_id,
+                "agent": archive_agent.to_mapping() if archive_agent else None,
                 "error": outcome.archive_error,
             },
             "export": (

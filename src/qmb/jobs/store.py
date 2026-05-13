@@ -10,7 +10,7 @@ from typing import Any
 
 from qmb.jobs.artifacts import write_jsonl_rows
 from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
-from qmb.types import SchemaField
+from qmb.types import AgentContext, SchemaField
 
 
 class JobStoreError(Exception):
@@ -56,6 +56,7 @@ class JobStore:
         execution_seconds: float = 0.0,
         session_id: str | None = None,
         parent_job_id: str | None = None,
+        agent_context: AgentContext | None = None,
         result_path: Path | None = None,
     ) -> JobRecord:
         """Create a new job record and write its archive artifacts."""
@@ -85,6 +86,7 @@ class JobStore:
             created_at=created_at,
             session_id=session_id,
             parent_job_id=parent_job_id,
+            agent_context=agent_context,
             source=source,
             engine=engine,
             total_rows=total_rows,
@@ -163,11 +165,16 @@ class JobStore:
             schema = [SchemaField.from_mapping(field) for field in schema_data]
             result_name = artifacts.get("result")
             stats = metadata["stats"]
+            agent_data = metadata.get("agent")
+            agent_context = (
+                AgentContext.from_mapping(agent_data) if isinstance(agent_data, dict) else None
+            )
             return JobRecord(
                 qmb_job_id=metadata["qmb_job_id"],
                 created_at=datetime.fromisoformat(metadata["created_at"]),
                 session_id=metadata.get("session_id"),
                 parent_job_id=metadata.get("parent_job_id"),
+                agent_context=agent_context,
                 source=SourceMetadata.from_mapping(metadata["source"]),
                 engine=EngineMetadata.from_mapping(metadata["engine"]),
                 total_rows=stats["total_rows"],

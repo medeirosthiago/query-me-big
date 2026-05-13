@@ -5,9 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from qmb.types import SchemaField
+from qmb.types import AgentContext, SchemaField
 
-ARCHIVE_VERSION = 1
+ARCHIVE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,7 @@ class JobRecord:
     result_path: Path | None = None
     session_id: str | None = None
     parent_job_id: str | None = None
+    agent_context: AgentContext | None = None
     schema: list[SchemaField] | None = None
 
     def to_metadata(self) -> dict[str, Any]:
@@ -102,6 +103,7 @@ class JobRecord:
             "created_at": self.created_at.isoformat(),
             "session_id": self.session_id,
             "parent_job_id": self.parent_job_id,
+            "agent": self.agent_context.to_mapping() if self.agent_context is not None else None,
             "source": self.source.to_mapping(),
             "engine": self.engine.to_mapping(),
             "stats": {

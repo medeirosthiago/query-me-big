@@ -68,6 +68,7 @@ class JobsController:
             label = record.source.label
             job_id = record.qmb_job_id
             short_id = job_id.rsplit("_", 1)[-1]
+            session_id = self._session_id(record)
             sql = self._sql_excerpt(record)
             if q and not any(
                 q in s
@@ -75,6 +76,7 @@ class JobsController:
                     label.lower(),
                     job_id.lower(),
                     short_id.lower(),
+                    (session_id or "").lower(),
                     date_str,
                     sql.lower(),
                 )
@@ -85,14 +87,23 @@ class JobsController:
                 f"{fmt_bytes(record.bytes_processed)} · "
             )
             tag = f"{label} [{short_id}]"
+            session_part = f" · session:{session_id}" if session_id else ""
             sql_part = f" · {sql}" if sql else ""
-            full = f"{prefix}{tag}{sql_part}"
+            full = f"{prefix}{tag}{session_part}{sql_part}"
             if len(full) > avail:
                 full = full[: max(avail - 3, 20)] + "..."
             opt.add_option(full)
             self.filtered_indices.append(i)
         if self.filtered_indices:
             opt.highlighted = 0
+
+    def _session_id(self, record: JobRecord) -> str | None:
+        """Return the archived session id, including legacy agent-only records."""
+        if record.session_id:
+            return record.session_id
+        if record.agent_context is not None:
+            return record.agent_context.session_id
+        return None
 
     def _sql_excerpt(self, record: JobRecord, max_chars: int = 500) -> str:
         """Return a whitespace-collapsed SQL excerpt for display/filter.

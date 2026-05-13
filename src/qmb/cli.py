@@ -187,17 +187,30 @@ def _coerce_var_value(raw_value: str) -> Any:
     return raw_value
 
 
+def _parse_key_value_pairs(items: list[str] | None, *, option_name: str) -> dict[str, Any]:
+    """Parse repeatable key=value CLI options into a mapping."""
+    if not items:
+        return {}
+    values: dict[str, Any] = {}
+    for item in items:
+        if "=" not in item:
+            raise typer.BadParameter(f"Invalid {option_name} format: '{item}'. Use key=value.")
+        key, _, value = item.partition("=")
+        key = key.strip()
+        if not key:
+            raise typer.BadParameter(f"Invalid {option_name} format: '{item}'. Key is empty.")
+        values[key] = _coerce_var_value(value.strip())
+    return values
+
+
 def _parse_vars(var_list: list[str] | None) -> dict[str, Any]:
     """Parse --var key=value pairs."""
-    if not var_list:
-        return {}
-    variables: dict[str, Any] = {}
-    for item in var_list:
-        if "=" not in item:
-            raise typer.BadParameter(f"Invalid --var format: '{item}'. Use key=value.")
-        key, _, value = item.partition("=")
-        variables[key.strip()] = _coerce_var_value(value.strip())
-    return variables
+    return _parse_key_value_pairs(var_list, option_name="--var")
+
+
+def _parse_agent_metadata(meta_list: list[str] | None) -> dict[str, Any]:
+    """Parse --meta key=value pairs for agent metadata."""
+    return _parse_key_value_pairs(meta_list, option_name="--meta")
 
 
 @app.command()
@@ -261,7 +274,8 @@ def run(
             help=(
                 "Tag this run with an agent/session identifier. Persisted "
                 "in the local archive and surfaced in the JSON output so "
-                "`qmb jobs list --session-id <id>` can recover the group."
+                "`qmb jobs list --session-id <id>` can recover the group. "
+                "Defaults to QMB_SESSION_ID when unset."
             ),
         ),
     ] = None,
@@ -273,6 +287,55 @@ def run(
                 "Reference a prior qmb job id this run derives from. "
                 "Persisted in the archive for later tree/graph navigation."
             ),
+        ),
+    ] = None,
+    agent: Annotated[
+        str | None,
+        typer.Option(
+            "--agent",
+            help="Agent/tool name for archive metadata (defaults to QMB_AGENT_NAME).",
+        ),
+    ] = None,
+    agent_conversation_id: Annotated[
+        str | None,
+        typer.Option(
+            "--agent-conversation-id",
+            help="Conversation identifier for archive metadata.",
+        ),
+    ] = None,
+    agent_run_id: Annotated[
+        str | None,
+        typer.Option(
+            "--agent-run-id",
+            help="Agent run identifier for archive metadata.",
+        ),
+    ] = None,
+    agent_turn_id: Annotated[
+        str | None,
+        typer.Option(
+            "--agent-turn-id",
+            help="Agent turn identifier for archive metadata.",
+        ),
+    ] = None,
+    agent_task: Annotated[
+        str | None,
+        typer.Option(
+            "--agent-task",
+            help="Human-readable task label for archive metadata.",
+        ),
+    ] = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--tag",
+            help="Tag for the archived run (repeatable; env QMB_AGENT_TAGS is comma-separated).",
+        ),
+    ] = None,
+    meta: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--meta",
+            help="Agent metadata key=value pair (repeatable; merged with QMB_AGENT_META_JSON).",
         ),
     ] = None,
     dry_run: Annotated[
@@ -375,7 +438,21 @@ def run(
         ext = {"csv": ".csv", "json": ".json", "parquet": ".parquet"}[export_format.value]
         out = Path(f"output{ext}")
 
+    from qmb.agent import build_agent_context, effective_session_id
+
     variables = _parse_vars(var)
+    agent_metadata = _parse_agent_metadata(meta)
+    session_id = effective_session_id(session_id)
+    agent_context = build_agent_context(
+        session_id=session_id,
+        name=agent,
+        conversation_id=agent_conversation_id,
+        run_id=agent_run_id,
+        turn_id=agent_turn_id,
+        task=agent_task,
+        tags=tag,
+        metadata=agent_metadata,
+    )
 
     request = QueryRequest(
         mode=mode,
@@ -396,6 +473,7 @@ def run(
         where=where,
         session_id=session_id,
         parent_job_id=parent_job_id,
+        agent_context=agent_context,
     )
 
     _execute(request, output_format=selected_format)
@@ -548,6 +626,92 @@ def jobs_list(
             f"{record.qmb_job_id}  {record.source.label}  "
             f"{record.total_rows:,} rows"
         )
+
+
+@jobs_app.command("sessions")
+def jobs_sessions(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            "-l",
+            help="Cap the number of sessions returned (newest first).",
+        ),
+    ] = None,
+) -> None:
+    """List local qmb agent/session ids summarized from archived jobs."""
+    from qmb.jobs.store import JobStore
+
+    summaries = _session_summaries(JobStore().list())
+    if limit is not None and limit >= 0:
+        summaries = summaries[:limit]
+
+    if output_format == "json":
+        typer.echo(json.dumps(summaries, indent=2))
+        return
+    if output_format != "text":
+        raise typer.BadParameter("Invalid format. Use text or json.")
+
+    if not summaries:
+        typer.echo("No qmb sessions found.")
+        return
+
+    for summary in summaries:
+        agents = ",".join(summary["agents"]) if summary["agents"] else "-"
+        typer.echo(
+            f"{summary['latest']}  "
+            f"{summary['count']:>4} jobs  "
+            f"{summary['session_id']}  "
+            f"agents:{agents}"
+        )
+
+
+def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for record in records:
+        session_id = record.session_id
+        if session_id is None and record.agent_context is not None:
+            session_id = record.agent_context.session_id
+        if not session_id:
+            continue
+
+        group = groups.setdefault(
+            session_id,
+            {
+                "session_id": session_id,
+                "count": 0,
+                "first": record.created_at,
+                "latest": record.created_at,
+                "agents": set(),
+                "tasks": set(),
+            },
+        )
+        group["count"] += 1
+        group["first"] = min(group["first"], record.created_at)
+        group["latest"] = max(group["latest"], record.created_at)
+        if record.agent_context is not None:
+            if record.agent_context.name:
+                group["agents"].add(record.agent_context.name)
+            if record.agent_context.task:
+                group["tasks"].add(record.agent_context.task)
+
+    summaries = [
+        {
+            "session_id": group["session_id"],
+            "count": group["count"],
+            "first": group["first"].isoformat(),
+            "latest": group["latest"].isoformat(),
+            "agents": sorted(group["agents"]),
+            "tasks": sorted(group["tasks"]),
+        }
+        for group in groups.values()
+    ]
+    summaries.sort(key=lambda summary: summary["latest"], reverse=True)
+    return summaries
 
 
 @jobs_app.command("show")
