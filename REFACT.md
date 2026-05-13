@@ -339,6 +339,17 @@ them pass in small implementation steps.
   - `qmb jobs open <job>` opens `preview.jsonl` in the existing TUI without
     calling BigQuery
   - This is a Phase 9 bridge, not the full Phase 10 renderer split
+- [x] Add in-TUI navigation between archived jobs
+  - New `tui/jobs_picker.py` (`JobsController`) mirrors the history picker
+  - `J` opens the archived-jobs picker; selecting a job swaps the
+    current `QueryResultApp` view to that job's preview without
+    re-running the query
+  - Filter matches against source label, full + short qmb job ID,
+    and the date string
+  - Rebound BigQuery history from `r` to `H` for consistency (both
+    "history-ish" pickers are now capital letters); `J` does not collide
+    with `j` (cursor down)
+  - Help screen and README shortcut tables updated
 
 ### Phase 9C — Later, not now
 
