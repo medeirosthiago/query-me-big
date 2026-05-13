@@ -109,33 +109,42 @@ def _install_common_mocks(
     return client
 
 
-def test_ad_hoc_sql_flow_resolves_executes_and_opens_tui(monkeypatch) -> None:
-    execute = _ExecuteRecorder()
+def test_ad_hoc_sql_flow_runs_headless_by_default(monkeypatch) -> None:
+    """`qmb run` is headless by default: JSON to stdout, no TUI."""
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: fake_client)
     tui_started: list[dict[str, Any]] = []
-    _install_common_mocks(monkeypatch, execute=execute, tui_started=tui_started)
+
+    def fake_init(self, **kwargs):
+        tui_started.append(kwargs)
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fake_init)
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.run", lambda self: None)
 
     result = CliRunner().invoke(cli.app, ["run", "SELECT 1"])
 
     assert result.exit_code == 0, result.output
-    assert len(execute.calls) == 1
-    call = execute.calls[0]
-    assert call["resolved"].sql == "SELECT 1"
-    assert call["resolved"].source_label == "ad-hoc"
-    assert call["dry_run"] is False
-    assert len(tui_started) == 1
-    assert tui_started[0]["source_label"] == "ad-hoc"
+    assert tui_started == []
+    # Default output is JSON.
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["dry_run"] is False
+    assert payload["stats"]["source_label"] == "ad-hoc"
 
 
-def test_no_tui_skips_tui(monkeypatch) -> None:
+def test_tui_short_flag_opens_tui(monkeypatch) -> None:
+    """`-t` opens the TUI (alias for --format tui)."""
     execute = _ExecuteRecorder()
     tui_started: list[dict[str, Any]] = []
     _install_common_mocks(monkeypatch, execute=execute, tui_started=tui_started)
 
-    result = CliRunner().invoke(cli.app, ["run", "SELECT 1", "--no-tui"])
+    result = CliRunner().invoke(cli.app, ["run", "SELECT 1", "-t"])
 
     assert result.exit_code == 0, result.output
     assert len(execute.calls) == 1
-    assert tui_started == []
+    assert len(tui_started) == 1
+    assert tui_started[0]["source_label"] == "ad-hoc"
 
 
 def test_file_mode_reads_file_and_resolves(monkeypatch, tmp_path: Path) -> None:
@@ -145,7 +154,7 @@ def test_file_mode_reads_file_and_resolves(monkeypatch, tmp_path: Path) -> None:
     execute = _ExecuteRecorder()
     _install_common_mocks(monkeypatch, execute=execute, tui_started=[])
 
-    result = CliRunner().invoke(cli.app, ["run", "--file", str(sql_path), "--no-tui"])
+    result = CliRunner().invoke(cli.app, ["run", "--file", str(sql_path), "--format", "table"])
 
     assert result.exit_code == 0, result.output
     assert len(execute.calls) == 1
@@ -195,7 +204,7 @@ def test_file_mode_with_resolve_dbt_calls_dbt_resolver(
             "--resolve-dbt",
             "--manifest",
             str(manifest_path),
-            "--no-tui",
+            "--format", "table",
         ],
     )
 
@@ -231,7 +240,7 @@ def test_model_mode_resolves_from_manifest(monkeypatch, tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         cli.app,
-        ["run", "--model", "orders", "--manifest", str(manifest_path), "--no-tui"],
+        ["run", "--model", "orders", "--manifest", str(manifest_path), "--format", "table"],
     )
 
     assert result.exit_code == 0, result.output
@@ -246,7 +255,7 @@ def test_where_clause_wraps_resolved_sql_in_subquery(monkeypatch) -> None:
     _install_common_mocks(monkeypatch, execute=execute, tui_started=[])
 
     result = CliRunner().invoke(
-        cli.app, ["run", "SELECT 1 AS x", "--where", "x = 1", "--no-tui"]
+        cli.app, ["run", "SELECT 1 AS x", "--where", "x = 1", "--format", "table"]
     )
 
     assert result.exit_code == 0, result.output
@@ -292,7 +301,7 @@ def test_export_csv_with_no_tui_calls_exporter(monkeypatch, tmp_path: Path) -> N
 
     result = CliRunner().invoke(
         cli.app,
-        ["run", "SELECT 1", "--export", "csv", "--out", str(out_path), "--no-tui"],
+        ["run", "SELECT 1", "--export", "csv", "--out", str(out_path), "--format", "table"],
     )
 
     assert result.exit_code == 0, result.output
@@ -309,7 +318,7 @@ def test_max_bytes_billed_is_passed_to_executor(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         cli.app,
-        ["run", "SELECT 1", "--max-bytes-billed", "12345", "--no-tui"],
+        ["run", "SELECT 1", "--max-bytes-billed", "12345", "--format", "table"],
     )
 
     assert result.exit_code == 0, result.output
@@ -327,7 +336,7 @@ def test_cli_run_archives_local_job(monkeypatch, tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         cli.app,
-        ["run", "SELECT * FROM example", "--where", "id = 1", "--no-tui"],
+        ["run", "SELECT * FROM example", "--where", "id = 1", "--format", "table"],
     )
 
     assert result.exit_code == 0, result.output
@@ -374,7 +383,7 @@ def test_export_json_round_trip_uses_real_exporter(
             "json",
             "--out",
             str(out_path),
-            "--no-tui",
+            "--format", "table",
         ],
     )
 
@@ -480,23 +489,6 @@ def test_format_dry_run_json_emits_dry_run_shape(monkeypatch, tmp_path: Path) ->
 
 def test_invalid_format_value_is_a_user_error(monkeypatch) -> None:
     """An unknown --format value fails fast with a BadParameter."""
-    result = CliRunner().invoke(
-        cli.app, ["run", "SELECT 1", "--format", "ndjson", "--no-tui"]
-    )
+    result = CliRunner().invoke(cli.app, ["run", "SELECT 1", "--format", "ndjson"])
     assert result.exit_code != 0
     assert "Invalid format" in result.output
-
-
-def test_format_tui_overrides_no_tui(monkeypatch) -> None:
-    """`--format tui` opens the TUI even alongside (legacy) --no-tui."""
-    execute = _ExecuteRecorder()
-    tui_started: list[dict[str, Any]] = []
-    _install_common_mocks(monkeypatch, execute=execute, tui_started=tui_started)
-
-    result = CliRunner().invoke(
-        cli.app,
-        ["run", "SELECT 1", "--format", "tui", "--no-tui"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(tui_started) == 1

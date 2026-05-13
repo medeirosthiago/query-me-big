@@ -152,9 +152,13 @@ def run(
         Path | None,
         typer.Option("--out", "-o", help="Export output path"),
     ] = None,
-    no_tui: Annotated[
+    tui: Annotated[
         bool,
-        typer.Option("--no-tui", help="Skip TUI, just export or print summary"),
+        typer.Option(
+            "--tui",
+            "-t",
+            help="Open the interactive Textual TUI instead of printing JSON",
+        ),
     ] = False,
     dry_run: Annotated[
         bool,
@@ -169,32 +173,34 @@ def run(
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
     ] = None,
     output_format: Annotated[
-        str | None,
+        str,
         typer.Option(
             "--format",
-            help=(
-                "Output format: json, csv, table, tui. "
-                "Default keeps the historical TUI behavior; "
-                "use --format json for headless / agent use."
-            ),
+            help="Output format: json (default), csv, table, tui.",
         ),
-    ] = None,
+    ] = "json",
 ) -> None:
-    """Run a BigQuery query with optional dbt model resolution."""
+    """Run a BigQuery query with optional dbt model resolution.
+
+    Prints a JSON object to stdout by default so the output can be piped
+    into ``jq`` or consumed by agents. Pass ``-t`` / ``--tui`` to open
+    the interactive Textual app instead.
+    """
     from qmb.formatters import Format
     from qmb.types import ExportFormat, InputMode, QueryRequest
 
-    # Resolve --format. Phase 10A keeps the original default behavior
-    # (status lines via TableFormatter + TUI via TuiFormatter unless
-    # --no-tui). Phase 10B will flip this to be TTY-aware.
-    selected_format: Format | None = None
-    if output_format is not None:
-        try:
-            selected_format = Format.parse(output_format)
-        except ValueError as e:
-            raise typer.BadParameter(str(e)) from e
-        # An explicit --format always overrides --no-tui.
-        no_tui = selected_format is not Format.TUI
+    # ``-t`` / ``--tui`` is a convenience alias for ``--format tui``. If
+    # both are given, the explicit ``--format`` wins.
+    try:
+        selected_format = Format.parse(output_format)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+    if tui and output_format == "json":
+        selected_format = Format.TUI
+    # ``no_tui`` is a leftover field on QueryRequest used by the TUI
+    # formatter to decide whether to launch; ``True`` means “don’t
+    # launch”, which is everything except ``--format tui``.
+    no_tui = selected_format is not Format.TUI
 
     # Validate mutually exclusive inputs
     inputs = sum(x is not None for x in [query, file, model])
@@ -276,6 +282,8 @@ def run(
     )
 
     _execute(request, output_format=selected_format)
+
+
 
 
 @app.command()
@@ -505,13 +513,12 @@ def browse(
     tui.run()
 
 
-def _execute(request: QueryRequest, *, output_format: Format | None = None) -> None:
+def _execute(request: QueryRequest, *, output_format: Format) -> None:
     """Run the application pipeline and render the result via a formatter.
 
-    ``output_format`` is the value parsed from ``--format``. When ``None``
-    (the user did not pass ``--format``) the CLI falls back to the
-    historical behavior: a :class:`TableFormatter` for status lines plus
-    a :class:`TuiFormatter` unless ``--no-tui`` was given.
+    ``output_format`` is the parsed ``--format`` value; the CLI dispatches
+    a single formatter from :func:`qmb.formatters.get_formatter`. ``run``
+    defaults to :class:`Format.JSON` so headless / agent use “just works”.
     """
     from qmb.application.pipeline import run_query_pipeline
     from qmb.dbt.integration import DbtSqlResolver
@@ -536,18 +543,10 @@ def _render_outcome(
     outcome: ExecutionOutcome,
     request: QueryRequest,
     *,
-    output_format: Format | None = None,
+    output_format: Format,
 ) -> None:
-    """Dispatch the outcome to the formatter(s) selected by ``--format``."""
-    from qmb.formatters import Format, get_formatter
-
-    if output_format is None:
-        # Phase 10A default: keep the historical UX. Print Rich status
-        # lines and optionally launch the TUI based on --no-tui.
-        get_formatter(Format.TABLE).render_run(outcome, request)
-        if not request.no_tui:
-            get_formatter(Format.TUI).render_run(outcome, request)
-        return
+    """Dispatch the outcome to the formatter selected by ``--format``."""
+    from qmb.formatters import get_formatter
 
     get_formatter(output_format).render_run(outcome, request)
 

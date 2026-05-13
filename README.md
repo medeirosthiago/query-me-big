@@ -61,7 +61,7 @@ qmb "SELECT * FROM \`my-project.analytics.orders\` WHERE status = 'shipped' LIMI
 qmb "SELECT * FROM \`my-project.warehouse.big_table\`" --dry-run
 
 # export straight to CSV without opening the TUI
-qmb "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv --no-tui
+qmb "SELECT user_id, email FROM \`my-project.core.users\`" --export csv --out users.csv
 ```
 
 ### dbt model
@@ -77,7 +77,7 @@ qmb --model orders --manifest /path/to/dbt/target/manifest.json
 qmb --model orders --var start_date=2024-01-01 --var end_date=2024-12-31
 
 # export a dbt model to parquet
-qmb --model customers --export parquet --out customers.parquet --no-tui
+qmb --model customers --export parquet --out customers.parquet
 
 # filter a big model with --where (wraps in a subquery at runtime, models untouched)
 qmb --model events --where "event_date >= '2024-01-01' AND event_type = 'click'"
@@ -161,9 +161,9 @@ qmb "SELECT * FROM \`project.dataset.table\`" --dry-run
 Export directly without opening the TUI:
 
 ```bash
-qmb "SELECT 1" --export csv --out results.csv --no-tui
-qmb --model orders --export json --out orders.json --no-tui
-qmb --file query.sql --export parquet --out data.parquet --no-tui
+qmb "SELECT 1" --export csv --out results.csv
+qmb --model orders --export json --out orders.json
+qmb --file query.sql --export parquet --out data.parquet
 ```
 
 If `--out` is omitted, defaults to `output.<ext>`.
@@ -236,23 +236,24 @@ Options below apply to `qmb run` (the default command). `qmb browse` accepts `--
 | `--page-size` | | Rows per page in TUI (default: 200) |
 | `--export` | `-e` | Export format: `csv`, `json`, or `parquet` |
 | `--out` | `-o` | Export output path |
-| `--no-tui` | | Skip TUI, just export or print summary (legacy; prefer `--format table`) |
+| `--tui` | `-t` | Open the interactive Textual TUI instead of printing JSON |
 | `--dry-run` | | Validate query without executing |
 | `--where` | `-w` | WHERE clause appended to the resolved SQL |
 | `--max-bytes-billed` | | Maximum bytes billed safety limit |
-| `--format` | | Output format: `json`, `csv`, `table`, `tui` (see below) |
+| `--format` | | Output format: `json` (default), `csv`, `table`, `tui` |
 
 ## Headless / agent mode (`--format`)
 
-`qmb run --format json` makes qmb usable from scripts, pipelines, and AI agents
-without screen-scraping the TUI. Each format selects a different renderer:
+qmb is headless by default: every command prints structured JSON to stdout
+so it can be piped into `jq` or consumed by AI agents without screen-scraping
+the TUI. The TUI is opt-in via `-t` / `--tui`.
 
-- `tui` — launch the Textual app (default when no `--format` is given)
-- `table` — Rich status lines on stdout, no TUI
-- `json` — structured JSON object on stdout (see schema below)
+For `qmb run`, four formats are available:
+
+- `json` — structured JSON object on stdout (**default**, see schema below)
 - `csv` — CSV with a header row drawn from the result schema
-
-Explicit `--format` always wins over `--no-tui`.
+- `table` — Rich status lines on stdout, no TUI
+- `tui` — launch the Textual app (also reachable via `-t` / `--tui`)
 
 ### JSON schema for `qmb run --format json`
 
