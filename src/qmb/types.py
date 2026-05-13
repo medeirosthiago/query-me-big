@@ -87,6 +87,8 @@ class QueryRequest:
     dry_run: bool = False
     max_bytes_billed: int | None = None
     where: str | None = None
+    session_id: str | None = None
+    parent_job_id: str | None = None
 
     @property
     def input(self) -> InputSpec:

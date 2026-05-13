@@ -157,6 +157,8 @@ def _archive_job(
         total_rows=handle.total_rows,
         bytes_processed=handle.bytes_processed,
         execution_seconds=handle.execution_seconds,
+        session_id=request.session_id,
+        parent_job_id=request.parent_job_id,
     )
 
 

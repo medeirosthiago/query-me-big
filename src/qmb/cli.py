@@ -254,6 +254,27 @@ def run(
             help="Open the interactive Textual TUI instead of printing JSON",
         ),
     ] = False,
+    session_id: Annotated[
+        str | None,
+        typer.Option(
+            "--session-id",
+            help=(
+                "Tag this run with an agent/session identifier. Persisted "
+                "in the local archive and surfaced in the JSON output so "
+                "`qmb jobs list --session-id <id>` can recover the group."
+            ),
+        ),
+    ] = None,
+    parent_job_id: Annotated[
+        str | None,
+        typer.Option(
+            "--parent-job-id",
+            help=(
+                "Reference a prior qmb job id this run derives from. "
+                "Persisted in the archive for later tree/graph navigation."
+            ),
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Validate query without executing"),
@@ -373,6 +394,8 @@ def run(
         dry_run=dry_run,
         max_bytes_billed=max_bytes_billed,
         where=where,
+        session_id=session_id,
+        parent_job_id=parent_job_id,
     )
 
     _execute(request, output_format=selected_format)
@@ -473,12 +496,42 @@ def jobs_list(
         str,
         typer.Option("--format", help="Output format: text or json"),
     ] = "text",
+    session_id: Annotated[
+        str | None,
+        typer.Option(
+            "--session-id",
+            help="Only show jobs tagged with this session id (set on `qmb run`).",
+        ),
+    ] = None,
+    parent_job_id: Annotated[
+        str | None,
+        typer.Option(
+            "--parent-job-id",
+            help="Only show jobs that descend from this parent qmb job id.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            "-l",
+            help="Cap the number of records returned (newest first).",
+        ),
+    ] = None,
 ) -> None:
     """List local qmb job archives."""
     from qmb.jobs.store import JobStore
 
     store = JobStore()
     records = store.list()
+
+    if session_id is not None:
+        records = [r for r in records if r.session_id == session_id]
+    if parent_job_id is not None:
+        records = [r for r in records if r.parent_job_id == parent_job_id]
+    if limit is not None and limit >= 0:
+        records = records[:limit]
+
     if output_format == "json":
         typer.echo(json.dumps([record.to_metadata() for record in records], indent=2))
         return
