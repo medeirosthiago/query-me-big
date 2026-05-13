@@ -27,7 +27,7 @@ def test_file_mode_resolve_dbt_auto_discovers_manifest(
 
     captured: dict[str, object] = {}
 
-    def fake_execute(request) -> None:
+    def fake_execute(request, **_kwargs) -> None:
         captured["request"] = request
 
     monkeypatch.setattr(cli, "_execute", fake_execute)
@@ -72,7 +72,7 @@ def test_default_run_group_routes_options_to_run(monkeypatch, tmp_path: Path) ->
 
     captured: dict[str, object] = {}
 
-    def fake_execute(request) -> None:
+    def fake_execute(request, **_kwargs) -> None:
         captured["request"] = request
 
     monkeypatch.setattr(cli, "_execute", fake_execute)
@@ -87,7 +87,7 @@ def test_default_run_group_routes_options_to_run(monkeypatch, tmp_path: Path) ->
 def test_default_run_group_routes_positional_to_run(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_execute(request) -> None:
+    def fake_execute(request, **_kwargs) -> None:
         captured["request"] = request
 
     monkeypatch.setattr(cli, "_execute", fake_execute)
@@ -144,7 +144,7 @@ def test_version_short_flag_prints_version_and_exits() -> None:
 def test_explicit_run_still_works(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_execute(request) -> None:
+    def fake_execute(request, **_kwargs) -> None:
         captured["request"] = request
 
     monkeypatch.setattr(cli, "_execute", fake_execute)

@@ -10,13 +10,11 @@ from typing import TYPE_CHECKING, Annotated, Any
 import click
 import typer
 from rich.console import Console
-from rich.panel import Panel
 from typer.core import TyperGroup
-
-from qmb.types import fmt_bytes
 
 if TYPE_CHECKING:
     from qmb.application.outcomes import ExecutionOutcome
+    from qmb.formatters import Format
     from qmb.types import QueryRequest
 
 
@@ -170,9 +168,33 @@ def run(
         str | None,
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
     ] = None,
+    output_format: Annotated[
+        str | None,
+        typer.Option(
+            "--format",
+            help=(
+                "Output format: json, csv, table, tui. "
+                "Default keeps the historical TUI behavior; "
+                "use --format json for headless / agent use."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run a BigQuery query with optional dbt model resolution."""
+    from qmb.formatters import Format
     from qmb.types import ExportFormat, InputMode, QueryRequest
+
+    # Resolve --format. Phase 10A keeps the original default behavior
+    # (status lines via TableFormatter + TUI via TuiFormatter unless
+    # --no-tui). Phase 10B will flip this to be TTY-aware.
+    selected_format: Format | None = None
+    if output_format is not None:
+        try:
+            selected_format = Format.parse(output_format)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+        # An explicit --format always overrides --no-tui.
+        no_tui = selected_format is not Format.TUI
 
     # Validate mutually exclusive inputs
     inputs = sum(x is not None for x in [query, file, model])
@@ -253,7 +275,7 @@ def run(
         where=where,
     )
 
-    _execute(request)
+    _execute(request, output_format=selected_format)
 
 
 @app.command()
@@ -483,8 +505,14 @@ def browse(
     tui.run()
 
 
-def _execute(request: QueryRequest) -> None:
-    """Run the application pipeline, render status, and optionally open the TUI."""
+def _execute(request: QueryRequest, *, output_format: Format | None = None) -> None:
+    """Run the application pipeline and render the result via a formatter.
+
+    ``output_format`` is the value parsed from ``--format``. When ``None``
+    (the user did not pass ``--format``) the CLI falls back to the
+    historical behavior: a :class:`TableFormatter` for status lines plus
+    a :class:`TuiFormatter` unless ``--no-tui`` was given.
+    """
     from qmb.application.pipeline import run_query_pipeline
     from qmb.dbt.integration import DbtSqlResolver
     from qmb.jobs.store import JobStore
@@ -501,67 +529,27 @@ def _execute(request: QueryRequest) -> None:
         job_store=JobStore(),
         ignore_archive_errors=True,
     )
-    _render_outcome(outcome, request)
+    _render_outcome(outcome, request, output_format=output_format)
 
 
-def _render_outcome(outcome: ExecutionOutcome, request: QueryRequest) -> None:
-    """Print console messages for an :class:`ExecutionOutcome` and launch TUI."""
-    resolved = outcome.resolved
-    handle = outcome.handle
-    trace = outcome.trace
+def _render_outcome(
+    outcome: ExecutionOutcome,
+    request: QueryRequest,
+    *,
+    output_format: Format | None = None,
+) -> None:
+    """Dispatch the outcome to the formatter(s) selected by ``--format``."""
+    from qmb.formatters import Format, get_formatter
 
-    # Reproduce the dim manifest-match status messages.
-    if trace.matched_node_id:
-        if trace.matched_via_raw_code:
-            console.print(
-                f"[dim]Matched {trace.matched_node_id} (no compiled_code, "
-                "resolving from raw SQL)[/dim]"
-            )
-        else:
-            console.print(
-                f"[dim]Matched manifest node: {trace.matched_node_id}[/dim]"
-            )
-
-    if outcome.dry_run:
-        console.print(Panel(resolved.sql, title="Resolved SQL (dry run)", border_style="cyan"))
-        console.print(f"[cyan]Estimated:[/cyan] {fmt_bytes(handle.bytes_processed)}")
+    if output_format is None:
+        # Phase 10A default: keep the historical UX. Print Rich status
+        # lines and optionally launch the TUI based on --no-tui.
+        get_formatter(Format.TABLE).render_run(outcome, request)
+        if not request.no_tui:
+            get_formatter(Format.TUI).render_run(outcome, request)
         return
 
-    console.print(f"[dim]Source: {resolved.source_label}[/dim]")
-    console.print("[dim]Executing query...[/dim]")
-    console.print(
-        f"[green]✓[/green] {handle.total_rows:,} rows · "
-        f"{fmt_bytes(handle.bytes_processed)} processed · "
-        f"Job: {handle.job_id}"
-    )
-
-    if outcome.archived_job is not None:
-        console.print(f"[dim]Archived: {outcome.archived_job.qmb_job_id}[/dim]")
-
-    if outcome.exported_path is not None:
-        console.print(f"[dim]Exporting to {outcome.exported_path}...[/dim]")
-        console.print(
-            f"[green]✓[/green] Exported {outcome.exported_rows:,} rows "
-            f"to {outcome.exported_path}"
-        )
-
-    if request.no_tui:
-        return
-
-    if handle.total_rows == 0:
-        console.print("[yellow]No rows to display.[/yellow]")
-        return
-
-    from qmb.tui.app import QueryResultApp
-
-    tui = QueryResultApp(
-        bq_client=outcome.client,
-        handle=handle,
-        source_label=resolved.source_label,
-        resolved_sql=resolved.sql,
-        page_size=request.page_size,
-    )
-    tui.run()
+    get_formatter(output_format).render_run(outcome, request)
 
 
 if __name__ == "__main__":

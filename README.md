@@ -236,10 +236,65 @@ Options below apply to `qmb run` (the default command). `qmb browse` accepts `--
 | `--page-size` | | Rows per page in TUI (default: 200) |
 | `--export` | `-e` | Export format: `csv`, `json`, or `parquet` |
 | `--out` | `-o` | Export output path |
-| `--no-tui` | | Skip TUI, just export or print summary |
+| `--no-tui` | | Skip TUI, just export or print summary (legacy; prefer `--format table`) |
 | `--dry-run` | | Validate query without executing |
 | `--where` | `-w` | WHERE clause appended to the resolved SQL |
 | `--max-bytes-billed` | | Maximum bytes billed safety limit |
+| `--format` | | Output format: `json`, `csv`, `table`, `tui` (see below) |
+
+## Headless / agent mode (`--format`)
+
+`qmb run --format json` makes qmb usable from scripts, pipelines, and AI agents
+without screen-scraping the TUI. Each format selects a different renderer:
+
+- `tui` — launch the Textual app (default when no `--format` is given)
+- `table` — Rich status lines on stdout, no TUI
+- `json` — structured JSON object on stdout (see schema below)
+- `csv` — CSV with a header row drawn from the result schema
+
+Explicit `--format` always wins over `--no-tui`.
+
+### JSON schema for `qmb run --format json`
+
+Successful (non-dry-run) execution:
+
+```json
+{
+  "dry_run": false,
+  "stats": {
+    "total_rows": 100,
+    "bytes_processed": 12345,
+    "execution_seconds": 1.23,
+    "job_id": "<bigquery job id>",
+    "project": "...",
+    "location": "US",
+    "source_label": "ad-hoc"
+  },
+  "schema": [{"name": "id", "type": "INTEGER", "mode": "NULLABLE"}],
+  "rows":   [{"id": 1}],
+  "archive": {"qmb_job_id": "20260101T120000-abc12345"},
+  "export":  null
+}
+```
+
+Dry run:
+
+```json
+{
+  "dry_run": true,
+  "sql": "<resolved sql>",
+  "stats": {"bytes_processed": 12345, "source_label": "ad-hoc"},
+  "schema": []
+}
+```
+
+Value coercion: dates and timestamps become ISO 8601 strings, `NUMERIC` /
+`BIGNUMERIC` become floats, `BYTES` becomes a hex string, nested
+`STRUCT`/`ARRAY` are preserved as nested JSON. The `archive.qmb_job_id`
+field matches the local archive entry written under `~/.qmb/jobs/<id>/`
+(see [Archived qmb jobs](#archived-qmb-jobs)) so an agent can immediately
+recover the resolved SQL, schema, and a row preview with
+`qmb jobs show <id>` / `qmb jobs sql <id>`.
 
 ## Architecture
 

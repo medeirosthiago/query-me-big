@@ -381,3 +381,122 @@ def test_export_json_round_trip_uses_real_exporter(
     assert result.exit_code == 0, result.output
     assert out_path.exists()
     assert json.loads(out_path.read_text(encoding="utf-8")) == rows
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A: --format flag wires through to the formatters package
+# ---------------------------------------------------------------------------
+
+
+def test_format_json_emits_structured_payload_on_stdout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`qmb run --format json` prints a single JSON object with rows + stats."""
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: fake_client)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+
+    # If the TUI somehow launches the test will hang / error; assert it does not.
+    def fail_init(*a, **kw):
+        raise AssertionError("TUI must not launch when --format json is requested")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(
+        cli.app, ["run", "SELECT * FROM example", "--format", "json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["dry_run"] is False
+    assert payload["stats"]["total_rows"] == 3
+    assert payload["stats"]["source_label"] == "ad-hoc"
+    assert payload["schema"] == [
+        {"name": "id", "type": "INTEGER", "mode": "NULLABLE"},
+        {"name": "enabled", "type": "BOOLEAN", "mode": "NULLABLE"},
+        {"name": "payload", "type": "JSON", "mode": "NULLABLE"},
+    ]
+    assert payload["rows"] == [
+        {"id": 1, "enabled": True, "payload": {"items": [1, 2]}},
+        {"id": 2, "enabled": False, "payload": {"items": [3]}},
+        {"id": 3, "enabled": True, "payload": {"items": []}},
+    ]
+    # Phase 9 archive id is surfaced in the JSON payload.
+    assert payload["archive"]["qmb_job_id"] is not None
+
+
+def test_format_csv_emits_header_and_rows_on_stdout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`qmb run --format csv` prints a CSV with a header row drawn from schema."""
+    import csv as _csv
+    import io as _io
+
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: fake_client)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+
+    def fail_init(*a, **kw):
+        raise AssertionError("TUI must not launch when --format csv is requested")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(
+        cli.app, ["run", "SELECT * FROM example", "--format", "csv"]
+    )
+
+    assert result.exit_code == 0, result.output
+    parsed = list(_csv.reader(_io.StringIO(result.output)))
+    # Header.
+    assert parsed[0] == ["id", "enabled", "payload"]
+    # Three data rows.
+    assert len(parsed) == 4
+    assert parsed[1][0] == "1"
+    assert parsed[1][1] == "True"
+    assert parsed[1][2] == '{"items": [1, 2]}'
+
+
+def test_format_dry_run_json_emits_dry_run_shape(monkeypatch, tmp_path: Path) -> None:
+    """`qmb run --dry-run --format json` emits the dry-run schema, not rows."""
+    execute = _ExecuteRecorder(handle=_handle(total_rows=0, bytes_processed=99))
+    _install_common_mocks(monkeypatch, execute=execute, tui_started=[])
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+
+    result = CliRunner().invoke(
+        cli.app, ["run", "SELECT 1", "--dry-run", "--format", "json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["dry_run"] is True
+    assert payload["sql"] == "SELECT 1"
+    assert payload["stats"]["bytes_processed"] == 99
+    assert "rows" not in payload
+
+
+def test_invalid_format_value_is_a_user_error(monkeypatch) -> None:
+    """An unknown --format value fails fast with a BadParameter."""
+    result = CliRunner().invoke(
+        cli.app, ["run", "SELECT 1", "--format", "ndjson", "--no-tui"]
+    )
+    assert result.exit_code != 0
+    assert "Invalid format" in result.output
+
+
+def test_format_tui_overrides_no_tui(monkeypatch) -> None:
+    """`--format tui` opens the TUI even alongside (legacy) --no-tui."""
+    execute = _ExecuteRecorder()
+    tui_started: list[dict[str, Any]] = []
+    _install_common_mocks(monkeypatch, execute=execute, tui_started=tui_started)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["run", "SELECT 1", "--format", "tui", "--no-tui"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(tui_started) == 1
