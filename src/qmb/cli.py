@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 
 
 class _DefaultRunGroup(TyperGroup):
-    """Typer group that falls back to the 'run' command for unknown args."""
+    """Typer group that falls back to the 'run' command for unknown args.
+
+    Also installs a structured JSON error handler: every exception that
+    escapes a command body is converted into a one-line JSON object on
+    stderr with a categorized exit code (see :mod:`qmb.errors`).
+    """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         # Let top-level help / version flags reach the group itself so users
@@ -33,6 +38,94 @@ class _DefaultRunGroup(TyperGroup):
         ):
             args = ["run", *args]
         return super().parse_args(ctx, args)
+
+    def main(self, *args: Any, **kwargs: Any) -> Any:
+        # We always run the JSON error handler so the agent-facing
+        # contract is identical across real invocations and tests.
+        # ``emit_json_error`` calls ``sys.exit`` so test runners observe
+        # the categorized exit code via the resulting ``SystemExit``.
+        kwargs.pop("standalone_mode", None)
+        try:
+            result = super().main(*args, standalone_mode=False, **kwargs)
+            # Typer converts KeyboardInterrupt into click.exceptions.Exit(130)
+            # which, with standalone_mode=False, becomes the return value
+            # rather than a raised exception. Surface it explicitly.
+            if isinstance(result, int) and result != 0:
+                from qmb.errors import (
+                    EXIT_ENGINE_ERROR,
+                    EXIT_INTERRUPTED,
+                    emit_json_error,
+                )
+
+                if result == EXIT_INTERRUPTED:
+                    emit_json_error(
+                        type_="interrupted",
+                        message="Aborted by user",
+                        exit_code=EXIT_INTERRUPTED,
+                    )
+                emit_json_error(
+                    type_="internal_error",
+                    message=f"Process exited with code {result}",
+                    exit_code=result or EXIT_ENGINE_ERROR,
+                )
+            return result
+        except click.exceptions.UsageError as e:
+            # BadParameter, MissingParameter, NoSuchOption, generic UsageError.
+            from qmb.errors import EXIT_USER_ERROR, emit_json_error
+
+            emit_json_error(
+                type_="user_error",
+                message=e.format_message(),
+                exit_code=EXIT_USER_ERROR,
+                details={"class": type(e).__name__},
+            )
+        except click.exceptions.ClickException as e:
+            from qmb.errors import EXIT_USER_ERROR, emit_json_error
+
+            emit_json_error(
+                type_="user_error",
+                message=e.format_message(),
+                exit_code=EXIT_USER_ERROR,
+                details={"class": type(e).__name__},
+            )
+        except (KeyboardInterrupt, click.exceptions.Abort):
+            from qmb.errors import EXIT_INTERRUPTED, emit_json_error
+
+            emit_json_error(
+                type_="interrupted",
+                message="Aborted by user",
+                exit_code=EXIT_INTERRUPTED,
+            )
+        except (FileNotFoundError, PermissionError, IsADirectoryError) as e:
+            from qmb.errors import EXIT_USER_ERROR, emit_json_error
+
+            emit_json_error(
+                type_="user_error",
+                message=str(e),
+                exit_code=EXIT_USER_ERROR,
+                details={"class": type(e).__name__},
+            )
+        except Exception as e:
+            from qmb.errors import EXIT_ENGINE_ERROR, emit_json_error
+
+            error_type = _classify_exception(e)
+            emit_json_error(
+                type_=error_type,
+                message=str(e) or type(e).__name__,
+                exit_code=EXIT_ENGINE_ERROR,
+                details={"class": type(e).__name__},
+            )
+
+
+def _classify_exception(exc: BaseException) -> str:
+    """Categorize an unhandled exception for the JSON ``error.type`` field."""
+    try:
+        from google.api_core.exceptions import GoogleAPIError
+    except ImportError:
+        GoogleAPIError = ()  # type: ignore[assignment,misc]
+    if GoogleAPIError and isinstance(exc, GoogleAPIError):
+        return "engine_error"
+    return "internal_error"
 
 
 app = typer.Typer(

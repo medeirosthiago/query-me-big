@@ -155,7 +155,7 @@ def test_json_formatter_emits_full_payload_with_rows() -> None:
         {"id": 1, "name": "alice", "amount": 1.5, "created": "2026-01-01"},
         {"id": 2, "name": "bob", "amount": 2.25, "created": "2026-01-02"},
     ]
-    assert payload["archive"] == {"qmb_job_id": None}
+    assert payload["archive"] == {"qmb_job_id": None, "error": None}
     assert payload["export"] is None
 
 
@@ -187,7 +187,10 @@ def test_json_formatter_includes_archive_and_export_when_present(tmp_path) -> No
     JsonFormatter(stream=buf).render_run(outcome, _request())
 
     payload = json.loads(buf.getvalue())
-    assert payload["archive"] == {"qmb_job_id": "20260101T120000-abc12345"}
+    assert payload["archive"] == {
+        "qmb_job_id": "20260101T120000-abc12345",
+        "error": None,
+    }
     assert payload["export"] == {"path": str(tmp_path / "out.csv"), "rows": 2}
 
 

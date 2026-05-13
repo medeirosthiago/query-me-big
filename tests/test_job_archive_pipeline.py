@@ -240,3 +240,52 @@ def test_explicit_export_stays_separate_from_history_archive(
     assert outcome.archived_job is not None
     assert outcome.archived_job.result_path is None
     assert not (outcome.archived_job.directory / "result.jsonl").exists()
+
+
+def test_archive_failure_is_surfaced_when_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When ignore_archive_errors=True, the error is captured in outcome.archive_error
+    instead of failing the run."""
+    client = FakeClient(rows=[{"x": 1}])
+    _patch_pipeline_dependencies(monkeypatch, client=client, handle=_handle(total_rows=1))
+
+    class FailingStore:
+        def create(self, **kwargs: Any) -> Any:
+            raise OSError("Disk full")
+
+    request = QueryRequest(
+        mode=InputMode.SQL,
+        sql="SELECT 1 AS x",
+        no_tui=True,
+    )
+
+    outcome = run_query_pipeline(
+        request, job_store=FailingStore(), ignore_archive_errors=True
+    )
+
+    assert outcome.archived_job is None
+    assert outcome.archive_error is not None
+    assert "OSError" in outcome.archive_error
+    assert "Disk full" in outcome.archive_error
+
+
+def test_archive_failure_re_raised_when_not_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When ignore_archive_errors=False (default), archive failures propagate."""
+    client = FakeClient(rows=[{"x": 1}])
+    _patch_pipeline_dependencies(monkeypatch, client=client, handle=_handle(total_rows=1))
+
+    class FailingStore:
+        def create(self, **kwargs: Any) -> Any:
+            raise OSError("Disk full")
+
+    request = QueryRequest(
+        mode=InputMode.SQL,
+        sql="SELECT 1 AS x",
+        no_tui=True,
+    )
+
+    with pytest.raises(OSError, match="Disk full"):
+        run_query_pipeline(request, job_store=FailingStore())

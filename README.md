@@ -290,7 +290,7 @@ Successful (non-dry-run) execution:
   },
   "schema": [{"name": "id", "type": "INTEGER", "mode": "NULLABLE"}],
   "rows":   [{"id": 1}],
-  "archive": {"qmb_job_id": "20260101T120000-abc12345"},
+  "archive": {"qmb_job_id": "20260101T120000-abc12345", "error": null},
   "export":  null
 }
 ```

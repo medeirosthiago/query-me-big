@@ -98,6 +98,7 @@ class JsonFormatter:
                 "qmb_job_id": (
                     outcome.archived_job.qmb_job_id if outcome.archived_job else None
                 ),
+                "error": outcome.archive_error,
             },
             "export": (
                 {

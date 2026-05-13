@@ -94,6 +94,7 @@ def run_query_pipeline(
         exported_path = output.export_path
 
     archived_job = None
+    archive_error: str | None = None
     if job_store is not None:
         try:
             archived_job = _archive_job(
@@ -105,9 +106,10 @@ def run_query_pipeline(
                 resolver_name=_resolver_name(request),
                 matched_node_id=trace.matched_node_id,
             )
-        except Exception:
+        except Exception as exc:
             if not ignore_archive_errors:
                 raise
+            archive_error = f"{type(exc).__name__}: {exc}"
 
     return ExecutionOutcome(
         resolved=resolved,
@@ -117,6 +119,7 @@ def run_query_pipeline(
         exported_path=exported_path,
         exported_rows=exported_rows,
         archived_job=archived_job,
+        archive_error=archive_error,
     )
 
 

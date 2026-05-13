@@ -33,4 +33,5 @@ class ExecutionOutcome:
     exported_path: Path | None = None
     exported_rows: int | None = None
     archived_job: "JobRecord | None" = None
+    archive_error: str | None = None
     dry_run: bool = False
