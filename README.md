@@ -88,8 +88,10 @@ qmb history --days 14 | jq '.[].job_id'
 qmb jobs list --format json | jq '.[].qmb_job_id'
 qmb jobs sql <id>
 
-# tag a related batch of agent runs with a session id
-qmb "SELECT 1" --session-id agent-42
+# tag a related batch of agent runs with a session id + agent metadata
+export QMB_SESSION_ID=agent-42
+export QMB_AGENT_NAME=pi
+qmb "SELECT 1"
 qmb jobs list --format json --session-id agent-42
 
 # drop into the TUI for any command that supports it
@@ -107,6 +109,7 @@ qmb browse -t
 | `qmb describe TARGET` | Print dataset or table metadata (BigQuery REST shape). |
 | `qmb history` | Print recent BigQuery jobs from the Jobs API. |
 | `qmb jobs list` | List local qmb job archives. |
+| `qmb jobs sessions` | List local qmb session ids summarized from archived jobs. |
 | `qmb jobs show JOB_ID` | Print metadata for a local qmb job. |
 | `qmb jobs sql JOB_ID` | Print the archived resolved SQL for a local qmb job. |
 | `qmb jobs paths JOB_ID` | Print artifact paths for a local qmb job. |
@@ -140,8 +143,15 @@ Run a BigQuery query. Default output: a single JSON object on stdout. Pass
 | `--where CLAUSE` | `-w` | Wrap the resolved SQL in a subquery with this `WHERE`. |
 | `--dry-run` | | Validate + estimate bytes without executing or archiving. |
 | `--max-bytes-billed N` | | BigQuery safety limit (bytes). |
-| `--session-id ID` | | Tag this run with an agent/session id. Persisted in the archive. |
+| `--session-id ID` | | Tag this run with an agent/session id. Defaults to `QMB_SESSION_ID`; persisted in the archive. |
 | `--parent-job-id ID` | | Reference a prior qmb job this run derives from. |
+| `--agent NAME` | | Agent/tool name for archive metadata. Defaults to `QMB_AGENT_NAME`. |
+| `--agent-conversation-id ID` | | Conversation id for archive metadata. |
+| `--agent-run-id ID` | | Agent run id for archive metadata. |
+| `--agent-turn-id ID` | | Agent turn id for archive metadata. |
+| `--agent-task TEXT` | | Human-readable task label for archive metadata. |
+| `--tag TAG` | | Tag for the archived run (repeatable; `QMB_AGENT_TAGS` is comma-separated). |
+| `--meta KEY=VALUE` | | Arbitrary agent metadata (repeatable; merged with `QMB_AGENT_META_JSON`). |
 | `--format json\|csv\|table\|tui` | | Override the output renderer (default `json`). |
 | `--tui` | `-t` | Shortcut for `--format tui`. |
 
@@ -195,6 +205,18 @@ List local qmb job archives. JSON output is suitable for agent workflows.
 | `--parent-job-id ID` | | Filter to jobs that descend from this parent qmb job id. |
 | `--limit N` | `-l` | Cap the number of records (newest first). |
 
+### `qmb jobs sessions`
+
+List session ids found in the local qmb archive, newest session first.
+
+| Flag | Short | Description |
+|---|---|---|
+| `--format text\|json` | | Output format (default `text`). |
+| `--limit N` | `-l` | Cap the number of sessions returned (newest first). |
+
+JSON output includes `session_id`, `count`, `first`, `latest`, `agents`, and
+`tasks`.
+
 ### `qmb jobs show JOB_ID`
 
 Print metadata for one archived job.
@@ -246,9 +268,26 @@ query. The interactive verb — always TUI-first.
   "schema": [{"name": "id", "type": "INTEGER", "mode": "NULLABLE"}],
   "rows":   [{"id": 1}],
   "archive": {
-    "qmb_job_id":    "20260101T120000-abc12345",
-    "session_id":    null,
+    "qmb_job_id":    "qmb_2026-01-01_12-00-00_abc123",
+    "session_id":    "agent-42",
     "parent_job_id": null,
+    "agent": {
+      "name": "pi",
+      "session_id": "agent-42",
+      "conversation_id": null,
+      "run_id": null,
+      "turn_id": null,
+      "task": null,
+      "cwd": "/path/to/repo",
+      "repo_root": "/path/to/repo",
+      "git_branch": "main",
+      "git_sha": "...",
+      "git_dirty": false,
+      "user": "mds",
+      "host": "...",
+      "tags": [],
+      "metadata": {}
+    },
     "error":         null
   },
   "export":  null
@@ -348,17 +387,33 @@ Every successful (non-dry-run) query is archived locally under
 `~/.qmb/jobs/<qmb_job_id>/` with:
 
 ```text
-metadata.json    # qmb job id, BQ job id, project/location, bytes, rows, timing, source
+metadata.json    # qmb job id, agent/session context, source, engine, stats, artifacts
 query.sql        # exact resolved SQL sent to BigQuery
 schema.json      # result schema
 preview.jsonl    # first 500 rows for fast browsing / nvim preview
 ```
+
+Agent/session metadata can be supplied with flags or environment variables:
+
+```bash
+export QMB_SESSION_ID=pi-2026-05-13-orders-debug
+export QMB_AGENT_NAME=pi
+export QMB_AGENT_TASK="debug orders discrepancy"
+qmb "SELECT 1"
+```
+
+The archive keeps top-level `session_id` / `parent_job_id` fields for simple
+filtering and a nested `agent` object with `name`, `conversation_id`, `run_id`,
+`turn_id`, `task`, `cwd`, git branch/SHA/dirty state, `user`, `host`, `tags`,
+and arbitrary `metadata` from `--meta` / `QMB_AGENT_META_JSON`.
 
 Inspect or replay without touching BigQuery:
 
 ```bash
 qmb jobs list                            # newest first, text
 qmb jobs list --format json              # machine-readable
+qmb jobs sessions                        # session ids, newest first
+qmb jobs sessions --format json          # session summaries for scripting
 qmb jobs list --session-id agent-42      # filter by agent session
 qmb jobs show <id>                       # full metadata
 qmb jobs sql <id>                        # archived resolved SQL
@@ -368,9 +423,10 @@ qmb jobs open <id>                       # browse the preview in the TUI
 
 `<id>` accepts a full job id or any unambiguous substring. Inside the TUI,
 press `J` to switch the current view to any archived job's preview without
-re-running it. The picker filters against the date, row count, bytes
-processed, source label, short job id, and the SQL text — so you can search
-for `users` or `model: orders` and narrow the list.
+re-running it. The picker shows the session id when present and filters
+against the date, row count, bytes processed, source label, session id, short
+job id, and the SQL text — so you can search for `users`, a session id, or
+`model: orders` and narrow the list.
 
 ## `--format` and renderers
 
@@ -413,6 +469,8 @@ Layered, CLI-first. The TUI is one renderer among several.
 - `src/qmb/formatters/` — the only place that turns an `ExecutionOutcome`
   into stdout: `json_fmt.py`, `csv_fmt.py`, `table_fmt.py`, `tui_fmt.py`.
 - `src/qmb/errors.py` — `emit_json_error()` + exit-code constants.
+- `src/qmb/agent.py` — collects best-effort agent/session context from flags,
+  environment variables, cwd, git, user, and host for local archives.
 - `src/qmb/sql/` — plain SQL and `.sql` file loading; `PlainSqlResolver`.
 - `src/qmb/dbt/` — manifest discovery/loading, model selection, `ref` /
   `source` / `var` resolution; `DbtSqlResolver`.
