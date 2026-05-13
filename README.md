@@ -36,9 +36,9 @@ pip install "git+https://github.com/medeirosthiago/query-me-big.git"
 Pin to a release tag for reproducible installs:
 
 ```bash
-uv tool install "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
-pipx install "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
-pip install   "git+https://github.com/medeirosthiago/query-me-big.git@v0.2.0"
+uv tool install "git+https://github.com/medeirosthiago/query-me-big.git@v0.3.0"
+pipx install "git+https://github.com/medeirosthiago/query-me-big.git@v0.3.0"
+pip install   "git+https://github.com/medeirosthiago/query-me-big.git@v0.3.0"
 ```
 
 See the [releases page](https://github.com/medeirosthiago/query-me-big/releases) for available versions.

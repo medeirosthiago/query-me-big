@@ -9,23 +9,86 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-13
+
+**Headline change — qmb is now CLI-first.** Every command prints structured
+JSON to stdout by default and the Textual TUI is strictly opt-in via
+`-t` / `--tui`. This makes qmb usable from scripts, pipelines, and AI agents
+without screen-scraping; existing TUI-driven workflows are reachable with a
+single extra flag. Phase 10 of the refactor plan is complete.
+
 ### Added
+
+#### Headless / agent mode
+- `--format` flag on `qmb run` with four renderers: `json` (default), `csv`,
+  `table` (Rich status lines), `tui` (interactive Textual app). New
+  `src/qmb/formatters/` package houses the four renderers behind a single
+  `Formatter` protocol; the CLI is the only thing that picks a format.
+- `-t` / `--tui` short alias for `--format tui` on every command that has an
+  interactive mode (`qmb run`, `qmb history`, `qmb browse`).
+- `qmb describe <dataset[.table]>` — new command that prints dataset or
+  table metadata as JSON (mirrors `bq show --format prettyjson`). Accepts
+  the BQ-native `project:dataset.table` colon shorthand.
+- `qmb browse [PATTERN]` — positional fuzzy/glob pattern argument for
+  filtering catalog output (e.g. `qmb browse 'analytics_*'`).
+- Structured JSON error contract — every failure emits one JSON object on
+  **stderr** with `{"error": {"type": "...", "message": "...", "details": {...}}}`.
+  `type` values: `user_error`, `engine_error`, `internal_error`,
+  `interrupted`. New `src/qmb/errors.py` (`emit_json_error()`, `EXIT_*`
+  constants).
+- Standard exit codes: `0` success, `1` user error, `2` engine/internal
+  error, `3` IO/archive (reserved), `130` interrupted (Ctrl-C).
+- `--session-id` and `--parent-job-id` flags on `qmb run` for agent
+  workflows. Persisted in the local archive (`metadata.json`) and surfaced
+  in the JSON output's new `archive.session_id` / `archive.parent_job_id`
+  fields.
+- `qmb jobs list --session-id`, `--parent-job-id`, and `--limit` filters.
+- Archive failures surfaced explicitly in the JSON output:
+  `archive.error` carries the exception message instead of silently
+  dropping the archive entry.
 - TUI jobs picker: press `J` inside the TUI to browse the local qmb job
   archive (`~/.qmb/jobs/`). Selecting a job swaps the current view to that
-  job's preview without re-running the query. Each row shows the date, row
-  count, bytes processed, source label, short job ID, and the first part of
-  the resolved SQL. The filter matches the source label, full or short qmb
-  job ID, the date string, and the SQL text.
+  job's preview without re-running the query. The filter matches the
+  source label, full or short qmb job ID, the date string, and the SQL text.
 - New module `qmb.tui.jobs_picker` (`JobsController`); SQL excerpts are
-  read lazily from each job's `query.sql` and cached per job ID, so the
-  picker stays responsive across filter keystrokes.
+  read lazily and cached per job ID so the picker stays responsive across
+  filter keystrokes.
+- 50+ new tests (`test_formatters.py`, `test_cli_errors.py`,
+  `test_session_metadata.py`, plus expansions to `test_cli_flow.py` and
+  `test_cli.py`). Total: 176 tests passing.
 
 ### Changed
+
+- **`qmb "SELECT ..."` no longer opens the TUI.** The default output is now
+  structured JSON to stdout. Pass `-t` / `--tui` to open the Textual app.
+  Same applies to `qmb history` and `qmb browse`.
 - **TUI keybinding rebound**: BigQuery query history moved from `r` to `H`
   for consistency with the new `J` (archived qmb jobs) shortcut. Both
   "history-ish" pickers are now capital letters; `j` (cursor down) is
   unaffected.
+- `qmb jobs list` records now include `session_id` and `parent_job_id` in
+  the JSON output.
+- README rewritten as a comprehensive CLI-first reference with a per-command
+  options table sourced from `--help`, JSON output schemas, exit codes, and
+  the value-coercion rules used in JSON/CSV output.
 - Help screen and README shortcut tables updated.
+
+### Removed
+
+- **`--no-tui` flag removed.** With JSON as the default, the flag's
+  meaning collapsed ("don't change anything"). Use `--format table` if you
+  want the old Rich status output without the TUI; pass no `-t` for the
+  new JSON-only default.
+
+### Migration notes
+
+- Scripts that ran `qmb "SELECT ..." --no-tui --export csv --out f.csv`:
+  drop `--no-tui` (it's the default), keep everything else. JSON will also
+  be printed to stdout summarizing the run; redirect it (`>/dev/null`) or
+  consume it with `jq` if you don't want it on the terminal.
+- Scripts that relied on opening the TUI from a CLI invocation: add `-t`.
+- Anything parsing qmb's stderr for human-readable errors should now parse
+  JSON instead. The error message is in `.error.message`.
 
 ## [0.2.0] - 2026-05-12
 
@@ -164,5 +227,6 @@ dbt model support, and export.
 - Schema-aware display formatting (truncation, JSON pretty-printing for
   dict/list cells, datetime ISO formatting).
 
+[0.3.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.3.0
 [0.2.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.2.0
 [0.1.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.1.0
