@@ -2,10 +2,13 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from qmb.application.resolver import ResolutionTrace
 from qmb.types import QueryResultHandle, ResolvedQuery
+
+if TYPE_CHECKING:
+    from qmb.jobs.models import JobRecord
 
 __all__ = ["ExecutionOutcome"]
 
@@ -29,4 +32,5 @@ class ExecutionOutcome:
     trace: ResolutionTrace = ResolutionTrace()
     exported_path: Path | None = None
     exported_rows: int | None = None
+    archived_job: "JobRecord | None" = None
     dry_run: bool = False

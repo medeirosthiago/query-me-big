@@ -316,6 +316,34 @@ def test_max_bytes_billed_is_passed_to_executor(monkeypatch) -> None:
     assert execute.calls[0]["max_bytes_billed"] == 12345
 
 
+def test_cli_run_archives_local_job(monkeypatch, tmp_path: Path) -> None:
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr(
+        "qmb.bigquery.client.get_client", lambda *a, **kw: fake_client
+    )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["run", "SELECT * FROM example", "--where", "id = 1", "--no-tui"],
+    )
+
+    assert result.exit_code == 0, result.output
+    job_dirs = list((tmp_path / "jobs").iterdir())
+    assert len(job_dirs) == 1
+    job_dir = job_dirs[0]
+    assert (job_dir / "query.sql").read_text(encoding="utf-8") == (
+        "SELECT * FROM (SELECT * FROM example) __qmb WHERE id = 1"
+    )
+    assert (job_dir / "preview.jsonl").read_text(encoding="utf-8") == (
+        '{"id": 1, "enabled": true, "payload": {"items": [1, 2]}}\n'
+        '{"id": 2, "enabled": false, "payload": {"items": [3]}}\n'
+        '{"id": 3, "enabled": true, "payload": {"items": []}}\n'
+    )
+
+
 def test_export_json_round_trip_uses_real_exporter(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -333,6 +361,7 @@ def test_export_json_round_trip_uses_real_exporter(
     monkeypatch.setattr(
         "qmb.bigquery.client.get_client", lambda *a, **kw: fake_client
     )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
 
     out_path = tmp_path / "out.json"
 

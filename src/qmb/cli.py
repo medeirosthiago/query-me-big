@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -41,6 +42,8 @@ app = typer.Typer(
     no_args_is_help=True,
     cls=_DefaultRunGroup,
 )
+jobs_app = typer.Typer(help="Inspect local qmb job archives.", no_args_is_help=True)
+app.add_typer(jobs_app, name="jobs")
 console = Console()
 
 
@@ -311,6 +314,103 @@ def history(
     tui.run()
 
 
+@jobs_app.command("list")
+def jobs_list(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """List local qmb job archives."""
+    from qmb.jobs.store import JobStore
+
+    store = JobStore()
+    records = store.list()
+    if output_format == "json":
+        typer.echo(json.dumps([record.to_metadata() for record in records], indent=2))
+        return
+    if output_format != "text":
+        raise typer.BadParameter("Invalid format. Use text or json.")
+
+    if not records:
+        typer.echo("No local qmb jobs found.")
+        return
+
+    for record in records:
+        typer.echo(
+            f"{record.created_at:%Y-%m-%d %H:%M:%S}  "
+            f"{record.qmb_job_id}  {record.source.label}  "
+            f"{record.total_rows:,} rows"
+        )
+
+
+@jobs_app.command("show")
+def jobs_show(
+    job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """Show metadata for a local qmb job."""
+    record = _load_job_or_exit(job_id)
+    if output_format == "json":
+        typer.echo(json.dumps(record.to_metadata(), indent=2))
+        return
+    if output_format != "text":
+        raise typer.BadParameter("Invalid format. Use text or json.")
+
+    typer.echo(f"Job: {record.qmb_job_id}")
+    typer.echo(f"Created: {record.created_at.isoformat()}")
+    typer.echo(f"Source: {record.source.label}")
+    typer.echo(f"Engine: {record.engine.name}")
+    if record.engine.job_id:
+        typer.echo(f"Engine job: {record.engine.job_id}")
+    typer.echo(f"Rows: {record.total_rows:,}")
+    typer.echo(f"Bytes processed: {record.bytes_processed:,}")
+
+
+@jobs_app.command("sql")
+def jobs_sql(
+    job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],
+) -> None:
+    """Print the archived resolved SQL for a local qmb job."""
+    record = _load_job_or_exit(job_id)
+    typer.echo(record.query_path.read_text(encoding="utf-8"))
+
+
+@jobs_app.command("paths")
+def jobs_paths(
+    job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """Print artifact paths for a local qmb job."""
+    record = _load_job_or_exit(job_id)
+    paths = record.artifact_paths()
+    if output_format == "json":
+        typer.echo(json.dumps(paths, indent=2))
+        return
+    if output_format != "text":
+        raise typer.BadParameter("Invalid format. Use text or json.")
+
+    for name, path in paths.items():
+        typer.echo(f"{name}: {path}")
+
+
+def _load_job_or_exit(job_id: str):
+    from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
+
+    try:
+        return JobStore().read(job_id)
+    except JobNotFoundError as e:
+        raise typer.BadParameter(str(e)) from e
+    except AmbiguousJobIdError as e:
+        raise typer.BadParameter(str(e)) from e
+
+
 @app.command()
 def browse(
     project: Annotated[
@@ -350,6 +450,7 @@ def _execute(request: QueryRequest) -> None:
     """Run the application pipeline, render status, and optionally open the TUI."""
     from qmb.application.pipeline import run_query_pipeline
     from qmb.dbt.integration import DbtSqlResolver
+    from qmb.jobs.store import JobStore
     from qmb.sql.resolver import PlainSqlResolver
 
     # The CLI is the composition root: it decides which resolvers exist
@@ -357,7 +458,12 @@ def _execute(request: QueryRequest) -> None:
     # ``can_resolve`` returns True wins.
     resolvers = [DbtSqlResolver(), PlainSqlResolver()]
 
-    outcome = run_query_pipeline(request, resolvers=resolvers)
+    outcome = run_query_pipeline(
+        request,
+        resolvers=resolvers,
+        job_store=JobStore(),
+        ignore_archive_errors=True,
+    )
     _render_outcome(outcome, request)
 
 
@@ -391,6 +497,9 @@ def _render_outcome(outcome: ExecutionOutcome, request: QueryRequest) -> None:
         f"{fmt_bytes(handle.bytes_processed)} processed · "
         f"Job: {handle.job_id}"
     )
+
+    if outcome.archived_job is not None:
+        console.print(f"[dim]Archived: {outcome.archived_job.qmb_job_id}[/dim]")
 
     if outcome.exported_path is not None:
         console.print(f"[dim]Exporting to {outcome.exported_path}...[/dim]")
