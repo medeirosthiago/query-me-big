@@ -9,6 +9,22 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-15
+
+### Added
+
+- TUI visual mode: press `v` to anchor a rectangular cell selection, extend it
+  with `h`/`j`/`k`/`l` or arrow keys, and see the active range highlighted with
+  a `-- VISUAL -- (rows×columns)` page-bar indicator.
+- Visual-mode yanks: `y` / `yt` copy the selection as TSV for spreadsheet
+  paste, `yc` copies CSV with selected headers, and `yj` copies a JSON array of
+  selected row objects.
+- `SHORTCUT.md` as a complete per-mode keyboard shortcut reference.
+
+### Changed
+
+- README and in-app TUI help now document visual mode and visual yank formats.
+
 ## [0.3.2] - 2026-05-13
 
 ### Changed
@@ -262,6 +278,9 @@ dbt model support, and export.
 - Schema-aware display formatting (truncation, JSON pretty-printing for
   dict/list cells, datetime ISO formatting).
 
+[0.4.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.4.0
+[0.3.2]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.3.2
+[0.3.1]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.3.1
 [0.3.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.3.0
 [0.2.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.2.0
 [0.1.0]: https://github.com/medeirosthiago/query-me-big/releases/tag/v0.1.0
