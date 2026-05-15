@@ -1,5 +1,6 @@
 """Textual TUI application for browsing BigQuery results."""
 
+import contextlib
 import csv
 import io
 import json
@@ -8,10 +9,12 @@ import subprocess
 from typing import Any
 
 from google.cloud import bigquery
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.coordinate import Coordinate
 from textual.events import Key
 from textual.widgets import (
     DataTable,
@@ -149,7 +152,11 @@ class QueryResultApp(App):
         self.browser_only = browser_only
         self.current_page = 0
         self._raw_rows: list[dict[str, Any]] = []
+        self._display_rows: list[dict[str, str]] = []
         self._column_names: list[str] = []
+        # Visual mode: anchor as (row_idx, data_col_idx) when active.
+        self._visual_anchor: tuple[int, int] | None = None
+        self._visual_last_rect: tuple[int, int, int, int] | None = None
         self._key_router = PendingKeyRouter(timeout=0.4)
         self._search = CellSearchController(self)
         self._columns = ColumnPickerController(self)
@@ -252,6 +259,9 @@ class QueryResultApp(App):
     def _enforce_min_column(self, event: DataTable.CellHighlighted) -> None:
         if self._column_names and event.coordinate.column == 0:
             self.query_one("#result-table", DataTable).move_cursor(column=1)
+            return
+        if self._visual_anchor is not None:
+            self._refresh_visual_highlight()
 
     # -- key handling (hjkl + multi-key sequences) --------------------------
 
@@ -373,6 +383,47 @@ class QueryResultApp(App):
             event.stop()
             return
 
+        # Second key of a visual-mode yank. In visual mode, bare `y` defaults
+        # to TSV after the pending-key timeout, while `yc` / `yj` / `yt` copy
+        # immediately as CSV / JSON / TSV.
+        if self._key_router.is_pending("visual_y"):
+            self._key_router.clear()
+            event.prevent_default()
+            event.stop()
+            if self._visual_anchor is None:
+                return
+            if event.key == "escape":
+                self._exit_visual()
+                return
+            if event.key == "c":
+                self._copy_visual_selection("csv")
+            elif event.key == "j":
+                self._copy_visual_selection("json")
+            else:
+                self._copy_visual_selection("tsv")
+            self._exit_visual()
+            return
+
+        # Visual mode intercepts a small set of keys before falling through
+        # to the normal navigation / pending-key logic.
+        if self._visual_anchor is not None:
+            if event.key == "escape":
+                self._exit_visual()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "v":
+                self._exit_visual()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "y":
+                self._key_router.start("visual_y")
+                self.set_timer(self._key_router.timeout, self._on_pending_timeout)
+                event.prevent_default()
+                event.stop()
+                return
+
         # Escape clears search matches
         if event.key == "escape" and self._search.matches:
             self._search.clear()
@@ -465,6 +516,12 @@ class QueryResultApp(App):
             event.stop()
             return
 
+        if event.key == "v":
+            self._enter_visual()
+            event.prevent_default()
+            event.stop()
+            return
+
         # vim-style navigation
         table = self.query_one("#result-table", DataTable)
         if event.key == "h":
@@ -495,8 +552,11 @@ class QueryResultApp(App):
             self._open_export_picker()
         elif self._key_router.is_pending("y"):
             self._key_router.clear()
-
-
+        elif self._key_router.is_pending("visual_y"):
+            self._key_router.clear()
+            if self._visual_anchor is not None:
+                self._copy_visual_selection("tsv")
+                self._exit_visual()
 
     # -- cell search / column picker / browser search ----------------------
 
@@ -813,7 +873,10 @@ class QueryResultApp(App):
 
         self.current_page = result.page
         self._raw_rows = result.rows
+        self._display_rows = result.display_rows
         self._column_names = []
+        self._visual_anchor = None
+        self._visual_last_rect = None
         self._search.clear()
 
         if not result.display_rows:
@@ -835,10 +898,141 @@ class QueryResultApp(App):
 
         self._update_page_bar(result)
 
-    def _update_page_bar(self, result: PageResult) -> None:
-        self.query_one("#page-bar", Label).update(
-            f"Page: {result.page + 1}/{result.total_pages}  ·  ? for help"
+    def _update_page_bar(self, result: PageResult | None = None) -> None:
+        if result is not None:
+            self._page_bar_base = (
+                f"Page: {result.page + 1}/{result.total_pages}  ·  ? for help"
+            )
+        text = getattr(self, "_page_bar_base", "Page: 1/1  ·  ? for help")
+        if self._visual_anchor is not None:
+            r0, r1, c0, c1 = self._visual_rect()
+            text = f"-- VISUAL -- ({r1 - r0 + 1}×{c1 - c0 + 1})  ·  {text}"
+        self.query_one("#page-bar", Label).update(text)
+
+    # -- visual mode --------------------------------------------------------
+
+    def _enter_visual(self) -> None:
+        if not self._raw_rows or not self._column_names:
+            self._warn("No data to select")
+            return
+        table = self.query_one("#result-table", DataTable)
+        row_idx = table.cursor_coordinate.row
+        col_idx = self._data_col()
+        if row_idx < 0 or col_idx < 0:
+            return
+        self._visual_anchor = (row_idx, col_idx)
+        self._visual_last_rect = None
+        self._refresh_visual_highlight()
+        self._update_page_bar()
+
+    def _exit_visual(self) -> None:
+        if self._key_router.is_pending("visual_y"):
+            self._key_router.clear()
+        if self._visual_anchor is None:
+            return
+        self._visual_anchor = None
+        self._clear_visual_highlight()
+        self._update_page_bar()
+
+    def _visual_rect(self) -> tuple[int, int, int, int]:
+        """Return (row_min, row_max, col_min, col_max) inclusive."""
+        assert self._visual_anchor is not None
+        table = self.query_one("#result-table", DataTable)
+        ar, ac = self._visual_anchor
+        cr = max(0, min(table.cursor_coordinate.row, len(self._raw_rows) - 1))
+        cc = max(0, min(self._data_col(), len(self._column_names) - 1))
+        return min(ar, cr), max(ar, cr), min(ac, cc), max(ac, cc)
+
+    def _set_cell_plain(self, row_idx: int, data_col_idx: int) -> None:
+        table = self.query_one("#result-table", DataTable)
+        col_name = self._column_names[data_col_idx]
+        value = (
+            self._display_rows[row_idx].get(col_name, "")
+            if row_idx < len(self._display_rows)
+            else ""
         )
+        with contextlib.suppress(Exception):
+            table.update_cell_at(Coordinate(row_idx, data_col_idx + 1), value)
+
+    def _set_cell_selected(self, row_idx: int, data_col_idx: int) -> None:
+        table = self.query_one("#result-table", DataTable)
+        col_name = self._column_names[data_col_idx]
+        value = (
+            self._display_rows[row_idx].get(col_name, "")
+            if row_idx < len(self._display_rows)
+            else ""
+        )
+        with contextlib.suppress(Exception):
+            table.update_cell_at(
+                Coordinate(row_idx, data_col_idx + 1),
+                Text(value, style="reverse"),
+            )
+
+    def _refresh_visual_highlight(self) -> None:
+        if self._visual_anchor is None:
+            return
+        r0, r1, c0, c1 = self._visual_rect()
+        prev = self._visual_last_rect
+        # Clear cells that were selected before but aren't anymore.
+        if prev is not None:
+            pr0, pr1, pc0, pc1 = prev
+            for r in range(pr0, pr1 + 1):
+                for c in range(pc0, pc1 + 1):
+                    if not (r0 <= r <= r1 and c0 <= c <= c1):
+                        self._set_cell_plain(r, c)
+        # Mark current rect.
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                self._set_cell_selected(r, c)
+        self._visual_last_rect = (r0, r1, c0, c1)
+        self._update_page_bar()
+
+    def _clear_visual_highlight(self) -> None:
+        if self._visual_last_rect is None:
+            return
+        r0, r1, c0, c1 = self._visual_last_rect
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                self._set_cell_plain(r, c)
+        self._visual_last_rect = None
+
+    def _copy_visual_selection(self, fmt: str = "tsv") -> None:
+        if self._visual_anchor is None:
+            return
+        r0, r1, c0, c1 = self._visual_rect()
+        cols = self._column_names[c0 : c1 + 1]
+        label = fmt.upper()
+
+        if fmt == "json":
+            selected_rows = [
+                {col: self._raw_rows[r].get(col) for col in cols}
+                for r in range(r0, r1 + 1)
+            ]
+            text = json.dumps(selected_rows, indent=2, default=json_default)
+        else:
+            buf = io.StringIO()
+            if fmt == "csv":
+                writer = csv.DictWriter(buf, fieldnames=cols)
+                writer.writeheader()
+                for r in range(r0, r1 + 1):
+                    row = self._raw_rows[r]
+                    writer.writerow({col: get_raw_value(row.get(col)) for col in cols})
+            else:
+                label = "TSV"
+                writer = csv.writer(buf, dialect="excel-tab")
+                for r in range(r0, r1 + 1):
+                    row = self._raw_rows[r]
+                    writer.writerow([get_raw_value(row.get(col)) for col in cols])
+            text = buf.getvalue()
+
+        try:
+            clipboard.copy(text)
+        except ClipboardUnavailable:
+            self._error("Clipboard not available")
+            return
+        n_rows = r1 - r0 + 1
+        n_cols = c1 - c0 + 1
+        self._info(f"Copied {n_rows}×{n_cols} selection as {label}")
 
     def action_next_page(self) -> None:
         total_pages = max(1, math.ceil(self.handle.total_rows / self.page_size))

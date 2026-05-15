@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +48,39 @@ def _fake_fetch_page(client, handle, page, page_size=200):
     return PageResult(
         rows=[{"id": 1}, {"id": 2}, {"id": 3}],
         display_rows=[{"id": "1"}, {"id": "2"}, {"id": "3"}],
+        page=0,
+        total_pages=1,
+        total_rows=3,
+    )
+
+
+def _handle_3col() -> QueryResultHandle:
+    return QueryResultHandle(
+        job_id="job-3col",
+        project="proj",
+        location="US",
+        destination_table="proj.ds.tbl",
+        schema=[
+            {"name": "id", "type": "INTEGER", "mode": "NULLABLE"},
+            {"name": "name", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "city", "type": "STRING", "mode": "NULLABLE"},
+        ],
+        total_rows=3,
+    )
+
+
+def _fake_fetch_page_3x3(client, handle, page, page_size=200):
+    return PageResult(
+        rows=[
+            {"id": 1, "name": "Alice", "city": "NYC"},
+            {"id": 2, "name": "Bob", "city": "LA"},
+            {"id": 3, "name": "Carol", "city": "SF"},
+        ],
+        display_rows=[
+            {"id": "1", "name": "Alice", "city": "NYC"},
+            {"id": "2", "name": "Bob", "city": "LA"},
+            {"id": "3", "name": "Carol", "city": "SF"},
+        ],
         page=0,
         total_pages=1,
         total_rows=3,
@@ -878,4 +912,256 @@ def test_jobs_picker_caches_sql_reads(monkeypatch, tmp_path) -> None:
             assert reads == 1, f"expected 1 read, got {reads}"
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Visual mode
+# ---------------------------------------------------------------------------
+
+
+def test_visual_mode_enter_shows_indicator_in_page_bar(monkeypatch) -> None:
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            assert app._visual_anchor is None
+
+            await pilot.press("v")
+            await pilot.pause()
+
+            assert app._visual_anchor is not None
+            bar = str(app.query_one("#page-bar").render())
+            assert "VISUAL" in bar
+            assert "1×1" in bar
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    asyncio.run(run())
+
+
+def test_visual_mode_escape_exits(monkeypatch) -> None:
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.pause()
+            assert app._visual_anchor is not None
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app._visual_anchor is None
+            bar = str(app.query_one("#page-bar").render())
+            assert "VISUAL" not in bar
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    asyncio.run(run())
+
+
+def test_visual_mode_v_again_exits(monkeypatch) -> None:
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.pause()
+            assert app._visual_anchor is not None
+
+            await pilot.press("v")
+            await pilot.pause()
+            assert app._visual_anchor is None
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    asyncio.run(run())
+
+
+def test_visual_mode_y_copies_rectangle_as_tsv(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            # Cursor starts at (row=0, data_col=0). Enter visual, extend to 2x2.
+            await pilot.press("v")
+            await pilot.pause()
+            await pilot.press("j")
+            await pilot.press("l")
+            await pilot.pause()
+
+            bar = str(app.query_one("#page-bar").render())
+            assert "2×2" in bar
+
+            await pilot.press("y")
+            await pilot.pause(0.5)
+
+            assert "text" in captured
+            # excel-tab dialect uses \r\n; selection is 2 rows x 2 cols (id, name).
+            assert captured["text"] == "1\tAlice\r\n2\tBob\r\n"
+            # Visual mode exits after copy.
+            assert app._visual_anchor is None
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
+    asyncio.run(run())
+
+
+def test_visual_mode_y_copies_uses_raw_values(monkeypatch) -> None:
+    """Visual yank should use raw row values, not display strings."""
+    captured: dict[str, str] = {}
+
+    def fake_fetch_page(client, handle, page, page_size=200):
+        return PageResult(
+            rows=[{"id": 1, "name": "Alice", "city": "NYC"}],
+            display_rows=[{"id": "1", "name": "Alice (truncated…)", "city": "NYC"}],
+            page=0,
+            total_pages=1,
+            total_rows=1,
+        )
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.press("l")  # extend to id+name
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause(0.5)
+
+            assert captured["text"] == "1\tAlice\r\n"
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", fake_fetch_page)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
+    asyncio.run(run())
+
+
+def test_visual_mode_extend_backwards(monkeypatch) -> None:
+    """Anchor can be at the bottom-right; selection is the bounding rect."""
+    captured: dict[str, str] = {}
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            # Move cursor to (row=2, data_col=2) first.
+            await pilot.press("j")
+            await pilot.press("j")
+            await pilot.press("l")
+            await pilot.press("l")
+            await pilot.pause()
+            # Now enter visual and extend up-left to (0,1).
+            await pilot.press("v")
+            await pilot.press("k")
+            await pilot.press("k")
+            await pilot.press("h")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause(0.5)
+
+            # Selection: rows 0..2, cols name..city.
+            assert captured["text"] == (
+                "Alice\tNYC\r\n"
+                "Bob\tLA\r\n"
+                "Carol\tSF\r\n"
+            )
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
+    asyncio.run(run())
+
+
+def test_visual_mode_yc_copies_rectangle_as_csv(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.press("j")
+            await pilot.press("l")
+            await pilot.pause()
+
+            await pilot.press("y")
+            await pilot.press("c")
+            await pilot.pause()
+
+            assert captured["text"] == "id,name\r\n1,Alice\r\n2,Bob\r\n"
+            assert app._visual_anchor is None
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
+    asyncio.run(run())
+
+
+def test_visual_mode_yj_copies_rectangle_as_json(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.press("j")
+            await pilot.press("l")
+            await pilot.pause()
+
+            await pilot.press("y")
+            await pilot.press("j")
+            await pilot.pause()
+
+            assert json.loads(captured["text"]) == [
+                {"id": 1, "name": "Alice"},
+                {"id": 2, "name": "Bob"},
+            ]
+            assert app._visual_anchor is None
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
+    asyncio.run(run())
+
+
+def test_visual_mode_yt_copies_rectangle_as_tsv_without_waiting_for_timeout(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle_3col(), "ad-hoc", "select 1")
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            await pilot.press("v")
+            await pilot.press("j")
+            await pilot.press("l")
+            await pilot.pause()
+
+            await pilot.press("y")
+            await pilot.press("t")
+            await pilot.pause()
+
+            assert captured["text"] == "1\tAlice\r\n2\tBob\r\n"
+            assert app._visual_anchor is None
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)
+    monkeypatch.setattr(
+        "qmb.tui.app.clipboard.copy", lambda text: captured.update(text=text)
+    )
     asyncio.run(run())
