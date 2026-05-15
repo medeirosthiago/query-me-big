@@ -41,6 +41,15 @@ Yank (copy)
   yc            Copy selected row as CSV
   yj            Copy selected row as JSON
 
+Visual mode
+  v             Enter visual mode (rectangular selection)
+  h/j/k/l       Extend selection (arrow keys work too)
+  y             Copy selection as TSV (default; after short timeout)
+  yt            Copy selection as TSV immediately
+  yc            Copy selection as CSV (with headers)
+  yj            Copy selection as JSON array
+  v / Escape    Exit visual mode
+
 Inspect
   e             Open cell in nvim (read-only)
   s             Open full SQL query in nvim

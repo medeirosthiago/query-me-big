@@ -16,8 +16,9 @@ the 0.3.0 release; what remains are smaller, independent improvements.
   datasets / tables)
 
 ## Visual Mode
-- [ ] `v` enters visual mode for selecting ranges of cells/rows
-- [ ] Copy selection to clipboard (CSV/JSON)
+- [x] `v` enters visual mode for selecting ranges of cells/rows
+- [x] Copy selection to clipboard (TSV, pastes into Excel / Sheets)
+- [x] Copy selection as CSV / JSON (`yc` / `yj` in visual mode)
 - [ ] Export selection to file
 
 ## Query Re-execution & history navigation

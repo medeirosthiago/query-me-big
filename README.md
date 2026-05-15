@@ -511,7 +511,8 @@ protocol — the core never imports `qmb.dbt`.
 ## TUI keyboard shortcuts
 
 The TUI is opt-in via `-t` / `--tui` (or `qmb jobs open <id>`). Inside, the
-keybindings are vim-style.
+keybindings are vim-style. See [`SHORTCUT.md`](SHORTCUT.md) for the complete
+per-mode reference.
 
 ### Navigation
 
@@ -520,7 +521,7 @@ keybindings are vim-style.
 | `h` `j` `k` `l` / Arrow keys | Move left/down/up/right |
 | `gg` | Go to first row |
 | `G` | Go to last row |
-| `0` | Go to first column |
+| `0` | Go to first data column |
 | `$` | Go to last column |
 | `n` | Next page (or next search match) |
 | `N` | Previous search match |
@@ -555,6 +556,18 @@ keybindings are vim-style.
 | `yw` | Copy selected cell value |
 | `yc` | Copy selected row as CSV |
 | `yj` | Copy selected row as JSON |
+
+### Visual mode
+
+| Key | Action |
+|---|---|
+| `v` | Enter visual mode with a rectangular selection anchored at the current cell |
+| `h` `j` `k` `l` / Arrow keys | Extend the selection |
+| `y` | Copy selection as TSV after the short multi-key timeout |
+| `yt` | Copy selection as TSV immediately |
+| `yc` | Copy selection as CSV with headers |
+| `yj` | Copy selection as JSON array |
+| `v` / `Escape` | Exit visual mode |
 
 ### Inspect
 
