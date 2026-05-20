@@ -233,6 +233,7 @@ def test_jobs_sessions_json_groups_sessions_newest_first(
         {
             "session_id": "alpha",
             "count": 2,
+            "bytes_processed": 0,
             "first": "2026-05-13T10:00:00+00:00",
             "latest": "2026-05-13T12:00:00+00:00",
             "agents": ["codex", "pi"],
@@ -241,6 +242,7 @@ def test_jobs_sessions_json_groups_sessions_newest_first(
         {
             "session_id": "beta",
             "count": 1,
+            "bytes_processed": 0,
             "first": "2026-05-13T11:00:00+00:00",
             "latest": "2026-05-13T11:00:00+00:00",
             "agents": [],

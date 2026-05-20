@@ -876,11 +876,14 @@ def jobs_sessions(
         typer.echo("No qmb sessions found.")
         return
 
+    from qmb.types import fmt_bytes
+
     for summary in summaries:
         agents = ",".join(summary["agents"]) if summary["agents"] else "-"
         typer.echo(
             f"{summary['latest']}  "
             f"{summary['count']:>4} jobs  "
+            f"{fmt_bytes(summary['bytes_processed']):>10}  "
             f"{summary['session_id']}  "
             f"agents:{agents}"
         )
@@ -900,6 +903,7 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
             {
                 "session_id": session_id,
                 "count": 0,
+                "bytes_processed": 0,
                 "first": record.created_at,
                 "latest": record.created_at,
                 "agents": set(),
@@ -907,6 +911,7 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
             },
         )
         group["count"] += 1
+        group["bytes_processed"] += int(getattr(record, "bytes_processed", 0) or 0)
         group["first"] = min(group["first"], record.created_at)
         group["latest"] = max(group["latest"], record.created_at)
         if record.agent_context is not None:
@@ -919,6 +924,7 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
         {
             "session_id": group["session_id"],
             "count": group["count"],
+            "bytes_processed": group["bytes_processed"],
             "first": group["first"].isoformat(),
             "latest": group["latest"].isoformat(),
             "agents": sorted(group["agents"]),
