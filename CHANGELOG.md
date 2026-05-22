@@ -9,6 +9,17 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-22
+
+### Added
+
+- `qmb jobs sessions --format json` now aggregates `bytes_processed` and a
+  sorted `cwds` list (distinct `agent.cwd` values) per session, alongside the
+  existing count / first / latest / agents / tasks fields. The text output
+  shows a bytes column.
+- TUI visual-mode TSV yank (`y` / `yt`) now prepends the selected columns'
+  headers so the clipboard text round-trips with names into spreadsheets.
+
 ## [0.4.0] - 2026-05-15
 
 ### Added
