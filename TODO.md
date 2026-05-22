@@ -19,6 +19,7 @@ the 0.3.0 release; what remains are smaller, independent improvements.
 - [x] `v` enters visual mode for selecting ranges of cells/rows
 - [x] Copy selection to clipboard (TSV, pastes into Excel / Sheets)
 - [x] Copy selection as CSV / JSON (`yc` / `yj` in visual mode)
+- [x] Include column headers in TSV yank
 - [ ] Export selection to file
 
 ## Query Re-execution & history navigation
@@ -31,6 +32,14 @@ the 0.3.0 release; what remains are smaller, independent improvements.
 - [ ] Session / tree / fork navigation UI on top of the existing
   `session_id` and `parent_job_id` archive fields (data is persisted
   since 0.3.0, picker/visualization is the missing piece)
+
+## Sessions & Agent Metadata
+- [x] Persist `agent.cwd` / `repo_root` per job
+- [x] Aggregate `cwds` (and bytes processed) per session in
+  `qmb jobs sessions --format json`
+- [ ] Expand the qmb skill (`.agents/skills/qmb/SKILL.md`) to cover
+  session management workflows (browsing, filtering, naming
+  conventions)
 
 ## Local archive policy
 - [ ] Full result archive policy / config: `none | preview | full | auto`
