@@ -1001,7 +1001,8 @@ def test_visual_mode_y_copies_rectangle_as_tsv(monkeypatch) -> None:
 
             assert "text" in captured
             # excel-tab dialect uses \r\n; selection is 2 rows x 2 cols (id, name).
-            assert captured["text"] == "1\tAlice\r\n2\tBob\r\n"
+            # First row is the column header so the data round-trips with names.
+            assert captured["text"] == "id\tname\r\n1\tAlice\r\n2\tBob\r\n"
             # Visual mode exits after copy.
             assert app._visual_anchor is None
 
@@ -1036,7 +1037,7 @@ def test_visual_mode_y_copies_uses_raw_values(monkeypatch) -> None:
             await pilot.press("y")
             await pilot.pause(0.5)
 
-            assert captured["text"] == "1\tAlice\r\n"
+            assert captured["text"] == "id\tname\r\n1\tAlice\r\n"
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", fake_fetch_page)
     monkeypatch.setattr(
@@ -1071,6 +1072,7 @@ def test_visual_mode_extend_backwards(monkeypatch) -> None:
 
             # Selection: rows 0..2, cols name..city.
             assert captured["text"] == (
+                "name\tcity\r\n"
                 "Alice\tNYC\r\n"
                 "Bob\tLA\r\n"
                 "Carol\tSF\r\n"
@@ -1157,7 +1159,7 @@ def test_visual_mode_yt_copies_rectangle_as_tsv_without_waiting_for_timeout(monk
             await pilot.press("t")
             await pilot.pause()
 
-            assert captured["text"] == "1\tAlice\r\n2\tBob\r\n"
+            assert captured["text"] == "id\tname\r\n1\tAlice\r\n2\tBob\r\n"
             assert app._visual_anchor is None
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page_3x3)

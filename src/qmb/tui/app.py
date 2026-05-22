@@ -1020,6 +1020,7 @@ class QueryResultApp(App):
             else:
                 label = "TSV"
                 writer = csv.writer(buf, dialect="excel-tab")
+                writer.writerow(cols)
                 for r in range(r0, r1 + 1):
                     row = self._raw_rows[r]
                     writer.writerow([get_raw_value(row.get(col)) for col in cols])
