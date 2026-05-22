@@ -238,6 +238,7 @@ def test_jobs_sessions_json_groups_sessions_newest_first(
             "latest": "2026-05-13T12:00:00+00:00",
             "agents": ["codex", "pi"],
             "tasks": ["debug alpha"],
+            "cwds": [],
         },
         {
             "session_id": "beta",
@@ -247,6 +248,7 @@ def test_jobs_sessions_json_groups_sessions_newest_first(
             "latest": "2026-05-13T11:00:00+00:00",
             "agents": [],
             "tasks": [],
+            "cwds": [],
         },
     ]
 

@@ -908,6 +908,7 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
                 "latest": record.created_at,
                 "agents": set(),
                 "tasks": set(),
+                "cwds": set(),
             },
         )
         group["count"] += 1
@@ -919,6 +920,8 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
                 group["agents"].add(record.agent_context.name)
             if record.agent_context.task:
                 group["tasks"].add(record.agent_context.task)
+            if record.agent_context.cwd:
+                group["cwds"].add(record.agent_context.cwd)
 
     summaries = [
         {
@@ -929,6 +932,7 @@ def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
             "latest": group["latest"].isoformat(),
             "agents": sorted(group["agents"]),
             "tasks": sorted(group["tasks"]),
+            "cwds": sorted(group["cwds"]),
         }
         for group in groups.values()
     ]
