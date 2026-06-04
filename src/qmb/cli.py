@@ -1126,6 +1126,43 @@ def browse(
             help="Open the interactive browser pane instead of printing JSON",
         ),
     ] = False,
+    time_steps: Annotated[
+        bool,
+        typer.Option(
+            "--time",
+            help="Print per-step timings to stderr (does not affect stdout JSON).",
+        ),
+    ] = False,
+    workers: Annotated[
+        int,
+        typer.Option(
+            "--workers",
+            help="Concurrent threads used to fetch per-dataset tables (default: 8).",
+            min=1,
+            max=128,
+        ),
+    ] = 8,
+    legacy_list_tables: Annotated[
+        bool,
+        typer.Option(
+            "--legacy-list-tables",
+            help=(
+                "Use the old per-dataset list_tables fan-out instead of the "
+                "default INFORMATION_SCHEMA.TABLES path. Useful when the "
+                "calling user lacks bigquery.jobs.create permission."
+            ),
+        ),
+    ] = False,
+    refresh_regions: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-regions",
+            help=(
+                "Ignore the cached region list for this project and rediscover "
+                "from list_datasets. Has no effect with --legacy-list-tables."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Inspect datasets and tables in the active project.
 
@@ -1140,7 +1177,16 @@ def browse(
     client = get_client(project, location)
 
     if not tui:
-        _browse_print_json(client, pattern, project)
+        _browse_print_json(
+            client,
+            pattern,
+            project,
+            time_steps=time_steps,
+            workers=workers,
+            legacy_list_tables=legacy_list_tables,
+            location=location,
+            refresh_regions=refresh_regions,
+        )
         return
 
     from qmb.tui.app import QueryResultApp
@@ -1164,15 +1210,40 @@ def browse(
     app_instance.run()
 
 
-def _browse_print_json(client: Any, pattern: str | None, project: str | None) -> None:
-    """Print a JSON representation of the catalog (optionally filtered)."""
+def _browse_print_json(
+    client: Any,
+    pattern: str | None,
+    project: str | None,
+    *,
+    time_steps: bool = False,
+    workers: int = 8,
+    legacy_list_tables: bool = False,
+    location: str | None = None,
+    refresh_regions: bool = False,
+) -> None:
+    """Print a JSON representation of the catalog (optionally filtered).
+
+    When ``time_steps`` is true, print per-step wall-clock timings to
+    stderr. stdout JSON is unchanged so ``| jq`` still works.
+    """
+    import sys
+    import time as _time
+
     from qmb.bigquery.catalog import build_table_index, list_dataset_ids
     from qmb.bigquery.catalog_search import filter_browser_matches
 
-    dataset_ids = list_dataset_ids(client)
+    def _stamp(label: str, seconds: float, extra: str = "") -> None:
+        if not time_steps:
+            return
+        suffix = f"  {extra}" if extra else ""
+        print(f"[time] {label}: {seconds * 1000:8.1f} ms{suffix}", file=sys.stderr)
+
+    t0 = _time.perf_counter()
 
     if pattern is None:
         # Cheap path: just the dataset list, no per-dataset table fetch.
+        dataset_ids = list_dataset_ids(client)
+        _stamp("list_dataset_ids", _time.perf_counter() - t0, f"n={len(dataset_ids)}")
         payload = {
             "project": getattr(client, "project", None) or project,
             "datasets": dataset_ids,
@@ -1180,8 +1251,56 @@ def _browse_print_json(client: Any, pattern: str | None, project: str | None) ->
         typer.echo(json.dumps(payload))
         return
 
-    tables_by_dataset = build_table_index(client, dataset_ids)
+    if legacy_list_tables:
+        t_ds = _time.perf_counter()
+        dataset_ids = list_dataset_ids(client)
+        _stamp("list_dataset_ids", _time.perf_counter() - t_ds, f"n={len(dataset_ids)}")
+
+        t1 = _time.perf_counter()
+        tables_by_dataset = build_table_index(
+            client, dataset_ids, max_workers=workers
+        )
+        total_tables = sum(len(v) for v in tables_by_dataset.values())
+        _stamp(
+            "build_table_index",
+            _time.perf_counter() - t1,
+            f"datasets={len(tables_by_dataset)} tables={total_tables} workers={workers}",
+        )
+    else:
+        from qmb.bigquery.catalog_information_schema import (
+            list_tables_via_information_schema,
+        )
+
+        # If --location is given, pin to a single region (skip
+        # auto-discovery). Otherwise discover regions from list_datasets
+        # so multi-region projects are handled correctly.
+        explicit_location = location or getattr(client, "location", None)
+        pinned_locations = [explicit_location] if explicit_location else None
+
+        t1 = _time.perf_counter()
+        tables_by_dataset = list_tables_via_information_schema(
+            client,
+            project=project,
+            locations=pinned_locations,
+            refresh_cache=refresh_regions,
+        )
+        total_tables = sum(len(v) for v in tables_by_dataset.values())
+        _stamp(
+            "list_tables_via_information_schema",
+            _time.perf_counter() - t1,
+            f"datasets={len(tables_by_dataset)} tables={total_tables} "
+            f"locations={pinned_locations or 'auto'}",
+        )
+        dataset_ids = sorted(tables_by_dataset.keys(), key=str.lower)
+
+    t2 = _time.perf_counter()
     matches = filter_browser_matches(dataset_ids, tables_by_dataset, pattern)
+    _stamp(
+        "filter_browser_matches",
+        _time.perf_counter() - t2,
+        f"matches={len(matches)}",
+    )
+
     payload = {
         "project": getattr(client, "project", None) or project,
         "pattern": pattern,
@@ -1190,6 +1309,7 @@ def _browse_print_json(client: Any, pattern: str | None, project: str | None) ->
         ],
     }
     typer.echo(json.dumps(payload))
+    _stamp("total", _time.perf_counter() - t0)
 
 
 def _execute(request: QueryRequest, *, output_format: Format) -> None:

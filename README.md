@@ -161,12 +161,28 @@ Inspect datasets and tables. Without a pattern, prints the project's full
 dataset list. With a fuzzy or glob pattern, prints matching datasets and
 tables. Pass `-t` to open the Textual browser pane.
 
+By default the catalog is built from one `INFORMATION_SCHEMA.TABLES` query
+per region in parallel, which is dramatically faster than the per-dataset
+fan-out it replaces (~6× on a project with hundreds of datasets, ~10× when
+the regions cache is warm). The region list is cached at
+`~/.qmb/cache/regions/<project>.json` for 30 days; everything else
+(datasets, tables) is fetched fresh on every run so results are never
+stale unless the project starts using a brand-new region.
+
 | Flag | Short | Description |
 |---|---|---|
 | `PATTERN` (positional) | | Fuzzy match (e.g. `orders`) or glob (e.g. `analytics_*`). |
 | `--project ID` | | GCP project ID. |
-| `--location US\|EU\|...` | | BigQuery location. |
+| `--location US\|EU\|...` | | Pin INFORMATION_SCHEMA queries to one region (skips multi-region auto-discovery; may miss datasets in other regions). |
 | `--tui` | `-t` | Open the interactive browser pane instead of printing JSON. |
+| `--refresh-regions` | | Ignore the cached region list and re-discover from `list_datasets`. The fresh value is written back to the cache. Use after your project starts using a new region. |
+| `--legacy-list-tables` | | Fall back to the old per-dataset `list_tables` fan-out. Useful when the calling user lacks `bigquery.jobs.create` (required by the default INFORMATION_SCHEMA path). |
+| `--workers N` | | Concurrent threads for `--legacy-list-tables` (default `8`). Ignored otherwise. |
+| `--time` | | Print per-step wall-clock timings to stderr (does not affect stdout JSON). |
+
+The TUI browser pane (`qmb browse -t`) uses the same fast INFORMATION_SCHEMA
+path and automatically falls back to per-dataset `list_tables` if the
+underlying queries fail (e.g., restricted IAM).
 
 ### `qmb describe TARGET`
 

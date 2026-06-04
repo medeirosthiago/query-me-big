@@ -9,6 +9,46 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-04
+
+**Headline change — `qmb browse` is 6–10× faster on large projects.**
+On a production project with 117 datasets and ~17,000 tables, the
+`browse` command went from ~25 s to ~4 s cold and ~2.5 s with a warm
+regions cache. The TUI browser pane benefits identically. Default
+output is unchanged.
+
+### Changed
+
+- `qmb browse PATTERN` now builds the catalog by issuing one
+  `INFORMATION_SCHEMA.TABLES` query per region in parallel, replacing
+  the previous per-dataset `list_tables` fan-out that was bounded by
+  the single slowest dataset's pagination. Regions are auto-discovered
+  from `list_datasets` and cached at
+  `~/.qmb/cache/regions/<project>.json` for 30 days; subsequent runs
+  skip discovery entirely. Datasets and tables themselves are never
+  cached — every run sees fresh data.
+- The TUI browser pane (`qmb browse -t`) uses the same fast path, with
+  automatic fallback to per-dataset `list_tables` if the
+  INFORMATION_SCHEMA queries fail (e.g., restricted IAM without
+  `bigquery.jobs.create`).
+
+### Added
+
+- `qmb browse --refresh-regions` to ignore the cached region list,
+  re-run `list_datasets`, and rewrite the cache. Use after a project
+  starts using a region it hasn't used before.
+- `qmb browse --legacy-list-tables` to opt back into the old
+  per-dataset fan-out (required for callers without
+  `bigquery.jobs.create`).
+- `qmb browse --time` prints per-step wall-clock timings to stderr
+  without affecting stdout JSON.
+- `qmb browse --workers N` tunes the legacy-mode thread count
+  (default `8`); ignored in the default INFORMATION_SCHEMA path.
+- `QMB_REGIONS_CACHE_DIR` env var to override the default cache
+  location (`~/.qmb/cache/regions`).
+- `QMB_TRACE_INFO_SCHEMA=1` and `QMB_TRACE_CATALOG=1` diagnostic
+  environment variables for per-region / per-dataset timing traces.
+
 ## [0.4.1] - 2026-05-22
 
 ### Added
