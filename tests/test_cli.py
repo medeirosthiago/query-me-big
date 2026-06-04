@@ -267,26 +267,52 @@ def test_browse_without_pattern_prints_dataset_ids_as_json(monkeypatch) -> None:
     assert payload == {"project": "proj", "datasets": ["analytics", "raw"]}
 
 
-def test_browse_with_pattern_returns_filtered_matches(monkeypatch) -> None:
-    """`qmb browse <pattern>` returns dataset+table matches as JSON."""
+def test_browse_with_pattern_returns_filtered_matches(monkeypatch, tmp_path) -> None:
+    """`qmb browse <pattern>` (default INFORMATION_SCHEMA path) returns
+    dataset+table matches as JSON."""
     import json as _json
 
-    class FakeTable:
-        def __init__(self, table_id: str) -> None:
-            self.table_id = table_id
+    class FakeJob:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def result(self):
+            return self._rows
+
+    class FakeRow(dict):
+        # ``bigquery.Row`` supports ``row["col"]`` and ``row.col``; the
+        # caller only uses dict-style access.
+        pass
+
+    class FakeDatasetListItem:
+        def __init__(self, dataset_id: str, location: str) -> None:
+            self.dataset_id = dataset_id
+            self._properties = {"location": location}
 
     class FakeClient:
         project = "proj"
 
         def list_datasets(self, project=None):
-            return [type("D", (), {"dataset_id": "analytics_prod"})(),
-                    type("D", (), {"dataset_id": "analytics_dev"})(),
-                    type("D", (), {"dataset_id": "raw"})()]
+            return [
+                FakeDatasetListItem("analytics_prod", "us-west1"),
+                FakeDatasetListItem("analytics_dev", "us-west1"),
+                FakeDatasetListItem("raw", "us-west1"),
+            ]
 
-        def list_tables(self, dataset_ref):
-            return [FakeTable("orders"), FakeTable("users")]
+        def query(self, sql, location=None):
+            rows = [
+                FakeRow(table_schema="analytics_prod", table_name="orders"),
+                FakeRow(table_schema="analytics_prod", table_name="users"),
+                FakeRow(table_schema="analytics_dev", table_name="orders"),
+                FakeRow(table_schema="analytics_dev", table_name="users"),
+                FakeRow(table_schema="raw", table_name="orders"),
+                FakeRow(table_schema="raw", table_name="users"),
+            ]
+            return FakeJob(rows)
 
     monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+    # Isolate the regions cache from the developer's home directory.
+    monkeypatch.setenv("QMB_REGIONS_CACHE_DIR", str(tmp_path / "regions"))
 
     def fail_init(self, **kwargs):
         raise AssertionError("browse without -t must not open the TUI")
@@ -307,6 +333,113 @@ def test_browse_with_pattern_returns_filtered_matches(monkeypatch) -> None:
             f"{match['dataset_id']}.orders",
             f"{match['dataset_id']}.users",
         ]
+
+
+def test_browse_refresh_regions_ignores_cached_regions(monkeypatch, tmp_path) -> None:
+    """`qmb browse --refresh-regions` re-runs list_datasets even when a
+    fresh cache entry exists."""
+    import json as _json
+
+    from qmb.bigquery import regions_cache
+
+    monkeypatch.setenv("QMB_REGIONS_CACHE_DIR", str(tmp_path / "regions"))
+    # Seed the cache with stale regions that the fresh discovery would
+    # override. With --refresh-regions, the cached value must be ignored.
+    regions_cache.save_regions("proj", ["EU"])
+
+    class FakeJob:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def result(self):
+            return self._rows
+
+    class FakeRow(dict):
+        pass
+
+    class FakeDatasetListItem:
+        def __init__(self, dataset_id: str, location: str) -> None:
+            self.dataset_id = dataset_id
+            self._properties = {"location": location}
+
+    list_datasets_calls = {"count": 0}
+
+    class FakeClient:
+        project = "proj"
+
+        def list_datasets(self, project=None):
+            list_datasets_calls["count"] += 1
+            return [FakeDatasetListItem("ds1", "us-west1")]
+
+        def query(self, sql, location=None):
+            assert location == "us-west1", f"unexpected region: {location}"
+            return FakeJob([FakeRow(table_schema="ds1", table_name="t1")])
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    def fail_init(self, **kwargs):
+        raise AssertionError("browse without -t must not open the TUI")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(
+        cli.app, ["browse", "--refresh-regions", "ds*"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert list_datasets_calls["count"] == 1, (
+        "--refresh-regions must trigger live discovery exactly once"
+    )
+    payload = _json.loads(result.output.strip())
+    assert payload["matches"][0]["dataset_id"] == "ds1"
+    # Cache must be refreshed with the new region, not the stale 'EU'.
+    assert regions_cache.load_regions(
+        "proj", cache_dir=tmp_path / "regions"
+    ) == ["us-west1"]
+
+
+def test_browse_legacy_list_tables_uses_per_dataset_fan_out(monkeypatch) -> None:
+    """`qmb browse --legacy-list-tables` falls back to the per-dataset path
+    for callers without bigquery.jobs.create permission."""
+    import json as _json
+
+    class FakeTable:
+        def __init__(self, table_id: str) -> None:
+            self.table_id = table_id
+
+    class FakeClient:
+        project = "proj"
+
+        def list_datasets(self, project=None):
+            return [
+                type("D", (), {"dataset_id": "analytics_prod"})(),
+                type("D", (), {"dataset_id": "analytics_dev"})(),
+                type("D", (), {"dataset_id": "raw"})(),
+            ]
+
+        def list_tables(self, dataset_ref):
+            return [FakeTable("orders"), FakeTable("users")]
+
+        def query(self, sql, location=None):  # pragma: no cover - defensive
+            raise AssertionError(
+                "--legacy-list-tables must not issue INFORMATION_SCHEMA queries"
+            )
+
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
+
+    def fail_init(self, **kwargs):
+        raise AssertionError("browse without -t must not open the TUI")
+
+    monkeypatch.setattr("qmb.tui.app.QueryResultApp.__init__", fail_init)
+
+    result = CliRunner().invoke(
+        cli.app, ["browse", "--legacy-list-tables", "analytics_*"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output.strip())
+    dataset_ids = sorted(m["dataset_id"] for m in payload["matches"])
+    assert dataset_ids == ["analytics_dev", "analytics_prod"]
 
 
 def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:

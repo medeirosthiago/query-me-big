@@ -29,6 +29,9 @@ from qmb.bigquery.browser import (
     list_dataset_ids,
     list_dataset_tables,
 )
+from qmb.bigquery.catalog_information_schema import (
+    list_tables_via_information_schema,
+)
 from qmb.bigquery.exporters import export_results  # re-exported for tests/monkeypatch  # noqa: F401
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
@@ -44,6 +47,30 @@ from qmb.tui.jobs_picker import JobsController
 from qmb.tui.key_router import PendingKeyRouter
 from qmb.tui.search import CellSearchController, ColumnPickerController
 from qmb.types import ExportFormat, PageResult, QueryResultHandle, fmt_bytes
+
+
+def _load_browser_index_impl(
+    client: Any, dataset_ids: tuple[str, ...]
+) -> dict[str, tuple[str, ...]]:
+    """Build the dataset → tables map used by the browser pane.
+
+    Fast path: one ``INFORMATION_SCHEMA.TABLES`` query per region, in
+    parallel. Roughly 10× faster than per-dataset ``list_tables`` calls
+    on large projects, but requires ``bigquery.jobs.create``.
+
+    Fall back to the per-dataset fan-out on any error so users without
+    that permission still get a working browser (slower, but correct).
+    Empty datasets are backfilled from ``dataset_ids`` so the tree
+    always shows every dataset the user already saw.
+    """
+    try:
+        tables_by_dataset = list_tables_via_information_schema(client)
+    except Exception:
+        tables_by_dataset = build_table_index(client, dataset_ids)
+    for dataset_id in dataset_ids:
+        tables_by_dataset.setdefault(dataset_id, ())
+    return tables_by_dataset
+
 
 # ---------------------------------------------------------------------------
 # Main app
@@ -323,7 +350,7 @@ class QueryResultApp(App):
     @work(thread=True)
     def _load_browser_index(self, dataset_ids: tuple[str, ...]) -> None:
         try:
-            tables_by_dataset = build_table_index(self.bq_client, dataset_ids)
+            tables_by_dataset = _load_browser_index_impl(self.bq_client, dataset_ids)
         except Exception as exc:
             self.call_from_thread(self._browser.on_index_failed, str(exc))
             return
