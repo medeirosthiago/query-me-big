@@ -9,6 +9,19 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-04
+
+### Fixed
+
+- Declare `click>=8.0` as an explicit dependency. `qmb` has been using
+  `click.Context` / `click.exceptions.*` in `cli.py` since before this
+  release; older `typer` versions brought `click` in transitively, but
+  `typer>=0.26` no longer does. As a result `uv tool install qmb`
+  (which always resolves the latest typer) produced an environment
+  that failed on launch with `ModuleNotFoundError: No module named
+  'click'`. Existing installs can recover with
+  `uv tool upgrade qmb --reinstall`.
+
 ## [0.5.0] - 2026-06-04
 
 **Headline change — `qmb browse` is 6–10× faster on large projects.**
