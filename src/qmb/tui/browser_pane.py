@@ -185,7 +185,7 @@ class BrowserController:
             result.append(BrowserMatch(dataset_id=dataset_id, tables=tables))
         return result
 
-    def render(self) -> None:
+    def render(self, *, sync_search_input: bool = True) -> None:
         if not self.widgets_ready():
             return
         tree = self.app.query_one("#browser-tree", Tree)
@@ -230,7 +230,7 @@ class BrowserController:
         finally:
             self.rendering = False
 
-        if search.display:
+        if sync_search_input and search.display and search.value != self.query:
             search.value = self.query
         self.update_status(len(matches))
 
@@ -398,7 +398,7 @@ class BrowserController:
         self.query = value
         if self.query.strip():
             self.ensure_index()
-        self.render()
+        self.render(sync_search_input=False)
 
     def on_search_submitted(self, value: str) -> None:
         self.query = value

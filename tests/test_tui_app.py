@@ -392,6 +392,46 @@ def test_browser_toggle_and_table_search(monkeypatch) -> None:
     asyncio.run(run())
 
 
+def test_browser_search_change_does_not_rewrite_focused_input(monkeypatch) -> None:
+    """Incremental search must not reset the active input during its change cycle."""
+
+    async def run() -> None:
+        app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
+        app._browser_dataset_ids = ["dataset1", "dataset2", "dataset3"]
+        app._browser_tables_by_dataset = {
+            "dataset1": ("table1", "table2"),
+            "dataset2": ("table9",),
+            "dataset3": ("table1", "table2", "table3"),
+        }
+        app._browser_index_ready = True
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app.action_toggle_browser()
+            await pilot.pause()
+            app._open_browser_search()
+            await pilot.pause()
+
+            search = app.query_one("#browser-search", Input)
+            writes: list[str] = []
+            original_setattr = search.__class__.__setattr__
+
+            def record_value_writes(self, name, value):
+                if self is search and name == "value":
+                    writes.append(value)
+                original_setattr(self, name, value)
+
+            monkeypatch.setattr(search.__class__, "__setattr__", record_value_writes)
+
+            app._browser.on_search_changed("table1")
+            await pilot.pause()
+
+            assert writes == []
+
+    monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
+    asyncio.run(run())
+
+
 def test_browser_tree_expands_selected_dataset(monkeypatch) -> None:
     async def run() -> None:
         app = QueryResultApp(DummyBigQueryClient(), _handle(), "ad-hoc", "select 1")
