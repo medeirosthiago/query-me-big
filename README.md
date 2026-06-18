@@ -87,12 +87,15 @@ qmb history --days 14 | jq '.[].job_id'
 # local qmb archive: every successful run is saved under ~/.qmb/jobs/<id>/
 qmb jobs list --format json | jq '.[].qmb_job_id'
 qmb jobs sql <id>
+qmb jobs export <id>
+qmb jobs import <id>
 
 # tag a related batch of agent runs with a session id + agent metadata
 export QMB_SESSION_ID=agent-42
 export QMB_AGENT_NAME=pi
 qmb "SELECT 1"
 qmb jobs list --format json --session-id agent-42
+qmb jobs export --session-id agent-42
 
 # drop into the TUI for any command that supports it
 qmb "SELECT * FROM analytics.orders LIMIT 1000" -t
@@ -114,6 +117,8 @@ qmb browse -t
 | `qmb jobs sql JOB_ID` | Print the archived resolved SQL for a local qmb job. |
 | `qmb jobs paths JOB_ID` | Print artifact paths for a local qmb job. |
 | `qmb jobs open JOB_ID` | Open an archived qmb job's row preview in the TUI. |
+| `qmb jobs export [JOB_ID]` | Publish one job or a session of jobs to remote archive storage. |
+| `qmb jobs import [JOB_ID]` | Import one job or a session of jobs from remote archive storage. |
 | `qmb --version` / `-V` | Print the installed qmb version. |
 | `qmb --help` | Top-level command list. Every subcommand also accepts `--help`. |
 
@@ -140,6 +145,8 @@ Run a BigQuery query. Default output: a single JSON object on stdout. Pass
 | `--page-size N` | | Rows per page in the TUI (default `200`). |
 | `--export csv\|json\|parquet` | `-e` | Also export full results to a file. |
 | `--out PATH` | `-o` | Export output path (defaults to `output.<ext>`). |
+| `--publish` | | Publish the local qmb archive for this run to remote storage. |
+| `--destination URI` | | Remote archive URI for `--publish`. Defaults to `QMB_REMOTE_ARCHIVE_URI`, `~/.qmb/config.toml`, or `gs://your-bucket/qmb/`. |
 | `--where CLAUSE` | `-w` | Wrap the resolved SQL in a subquery with this `WHERE`. |
 | `--dry-run` | | Validate + estimate bytes without executing or archiving. |
 | `--max-bytes-billed N` | | BigQuery safety limit (bytes). |
@@ -277,6 +284,44 @@ query. The interactive verb — always TUI-first.
 | Flag | Description |
 |---|---|
 | `--page-size N` | Rows per page in the TUI (default `200`). |
+
+### `qmb jobs export [JOB_ID]`
+
+Publish local qmb archive artifacts to remote storage without re-running the
+query. Provide either `JOB_ID` or `--session-id`.
+
+Default destination: `gs://your-bucket/qmb/`.
+
+Remote layout:
+
+```text
+gs://your-bucket/qmb/sessions/<session_id>/<qmb_job_id>/
+  metadata.json
+  query.sql
+  schema.json
+  preview.jsonl
+```
+
+| Flag | Description |
+|---|---|
+| `JOB_ID` (optional positional) | Full or partial qmb job id to publish. |
+| `--session-id ID` / `--session ID` | Publish every local job in a session. |
+| `--destination URI` | Remote archive URI. Defaults through CLI/env/config/built-in precedence. |
+| `--format text\|json` | Output format (default `text`). |
+
+### `qmb jobs import [JOB_ID]`
+
+Import remote qmb archive artifacts into the local job store. Imported jobs keep
+their original `qmb_job_id`, so existing archive commands work after import.
+Provide either `JOB_ID` or `--session-id`.
+
+| Flag | Description |
+|---|---|
+| `JOB_ID` (optional positional) | Full or partial remote qmb job id to import. |
+| `--session-id ID` / `--session ID` | Import every remote job in a session. |
+| `--destination URI` | Remote archive URI. Defaults through CLI/env/config/built-in precedence. |
+| `--overwrite` | Replace an existing local job archive with the remote copy. Without this, existing jobs are skipped. |
+| `--format text\|json` | Output format (default `text`). |
 
 ## JSON output schemas
 
@@ -452,6 +497,10 @@ qmb jobs show <id>                       # full metadata
 qmb jobs sql <id>                        # archived resolved SQL
 qmb jobs paths <id> --format json        # absolute paths for editor integrations
 qmb jobs open <id>                       # browse the preview in the TUI
+qmb jobs export <id>                     # publish one local job archive to GCS
+qmb jobs export --session-id agent-42    # publish a whole session
+qmb jobs import <id>                     # import one remote job archive locally
+qmb jobs import --session-id agent-42    # import a whole remote session
 ```
 
 `<id>` accepts a full job id or any unambiguous substring. Inside the TUI,
@@ -460,6 +509,47 @@ re-running it. The picker shows the session id when present and filters
 against the date, row count, bytes processed, source label, session id, short
 job id, and the SQL text — so you can search for `users`, a session id, or
 `model: orders` and narrow the list.
+
+### Remote archive sharing
+
+qmb can mirror local job archives to remote storage for sharing with other
+developers or agents. The built-in destination is:
+
+```text
+gs://your-bucket/qmb/
+```
+
+Destination precedence is:
+
+1. `--destination gs://bucket/prefix`
+2. `QMB_REMOTE_ARCHIVE_URI`
+3. `~/.qmb/config.toml`
+4. `gs://your-bucket/qmb/`
+
+Config file example:
+
+```toml
+[remote_archive]
+uri = "gs://your-bucket/qmb/"
+preview_rows = 500
+```
+
+Publish while running a query:
+
+```bash
+qmb "SELECT 1" --session-id agent-42 --publish
+```
+
+Publish or load later without re-running BigQuery:
+
+```bash
+qmb jobs export --session-id agent-42
+qmb jobs import --session-id agent-42
+```
+
+Remote archives preserve `qmb_job_id` and mirror the local artifact names under
+`sessions/<session_id>/<qmb_job_id>/`, so imported jobs work with the same local
+commands (`qmb jobs show`, `qmb jobs sql`, `qmb jobs open`).
 
 ## `--format` and renderers
 
