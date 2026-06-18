@@ -53,6 +53,56 @@ def test_run_session_flags_propagate_into_archive_and_json(
     assert metadata["parent_job_id"] == "20260101T120000-abc12345"
 
 
+def test_run_publish_exports_archived_job_and_reports_remote_status(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema
+
+    fake_client = FakeBigQueryClient(_rows(), _schema())
+    monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: fake_client)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    exported: list[str] = []
+
+    class FakeRemoteResult:
+        def __init__(self, qmb_job_id: str) -> None:
+            self.qmb_job_id = qmb_job_id
+            self.status = "exported"
+
+        def to_mapping(self):
+            return {
+                "qmb_job_id": self.qmb_job_id,
+                "status": self.status,
+                "uri": f"gs://bucket/qmb/sessions/agent-42/{self.qmb_job_id}/",
+                "error": None,
+            }
+
+    class FakeRemote:
+        def export_job(self, record, *, preview_rows=None):
+            exported.append(record.qmb_job_id)
+            return FakeRemoteResult(record.qmb_job_id)
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = _runner().invoke(
+        cli.app,
+        [
+            "run",
+            "SELECT 1",
+            "--session-id",
+            "agent-42",
+            "--publish",
+            "--destination",
+            "gs://bucket/qmb/",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["remote_archive"]["status"] == "exported"
+    assert payload["remote_archive"]["destination"] == "gs://bucket/qmb/"
+    assert exported == [payload["archive"]["qmb_job_id"]]
+
+
 def test_run_without_session_flags_persists_null(monkeypatch, tmp_path: Path) -> None:
     """Default: session / parent fields are null in the archive."""
     from tests.test_bigquery_flow import FakeBigQueryClient, _rows, _schema

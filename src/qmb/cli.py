@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -113,6 +114,18 @@ class _DefaultRunGroup(TyperGroup):
                 details={"class": type(e).__name__},
             )
         except Exception as e:
+            if type(e).__name__ == "NoArgsIsHelpError":
+                return None
+            if hasattr(e, "format_message"):
+                from qmb.errors import EXIT_USER_ERROR, emit_json_error
+
+                emit_json_error(
+                    type_="user_error",
+                    message=e.format_message(),
+                    exit_code=EXIT_USER_ERROR,
+                    details={"class": type(e).__name__},
+                )
+
             from qmb.errors import EXIT_ENGINE_ERROR, emit_json_error
 
             error_type = _classify_exception(e)
@@ -266,6 +279,23 @@ def run(
     out: Annotated[
         Path | None,
         typer.Option("--out", "-o", help="Export output path"),
+    ] = None,
+    publish: Annotated[
+        bool,
+        typer.Option(
+            "--publish",
+            help="Publish the local qmb job archive to remote storage after a successful run.",
+        ),
+    ] = False,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help=(
+                "Remote archive destination URI. Defaults to QMB_REMOTE_ARCHIVE_URI, "
+                "~/.qmb/config.toml, or qmb's shared GCS default."
+            ),
+        ),
     ] = None,
     tui: Annotated[
         bool,
@@ -484,7 +514,7 @@ def run(
         agent_context=agent_context,
     )
 
-    _execute(request, output_format=selected_format)
+    _execute(request, output_format=selected_format, publish=publish, destination=destination)
 
 
 
@@ -1033,6 +1063,144 @@ def jobs_paths(
         typer.echo(f"{name}: {path}")
 
 
+@jobs_app.command("export")
+def jobs_export(
+    job_id: Annotated[
+        str | None,
+        typer.Argument(help="Full or partial qmb job ID to publish."),
+    ] = None,
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session-id", "--session", help="Publish all jobs in this session."),
+    ] = None,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive destination URI.",
+        ),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """Publish local qmb job archives to remote storage."""
+    if (job_id is None) == (session_id is None):
+        raise typer.BadParameter("Provide exactly one of JOB_ID or --session-id.")
+
+    from qmb.config import remote_archive_preview_rows, remote_archive_uri
+    from qmb.jobs.remote import RemoteArchiveError, get_remote_archive
+    from qmb.jobs.store import JobStore, JobStoreError
+
+    try:
+        store = JobStore()
+        records = (
+            [store.read(job_id)]
+            if job_id is not None
+            else _records_for_session(store, session_id)
+        )
+        resolved_destination = remote_archive_uri(destination)
+        remote = get_remote_archive(resolved_destination)
+        results = [
+            remote.export_job(record, preview_rows=remote_archive_preview_rows()).to_mapping()
+            for record in records
+        ]
+    except (JobStoreError, RemoteArchiveError) as e:
+        raise typer.BadParameter(str(e)) from e
+    _print_remote_archive_results(
+        results,
+        destination=resolved_destination,
+        output_format=output_format,
+        verb="exported",
+    )
+
+
+@jobs_app.command("import")
+def jobs_import(
+    job_id: Annotated[
+        str | None,
+        typer.Argument(help="Full or partial remote qmb job ID to import."),
+    ] = None,
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session-id", "--session", help="Import all jobs in this session."),
+    ] = None,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive destination URI.",
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Replace an existing local job archive."),
+    ] = False,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """Import remote qmb job archives into the local job store."""
+    if (job_id is None) == (session_id is None):
+        raise typer.BadParameter("Provide exactly one of JOB_ID or --session-id.")
+
+    from qmb.config import remote_archive_uri
+    from qmb.jobs.remote import RemoteArchiveError, get_remote_archive
+    from qmb.jobs.store import JobStore
+
+    try:
+        resolved_destination = remote_archive_uri(destination)
+        remote = get_remote_archive(resolved_destination)
+        store = JobStore()
+        if job_id is not None:
+            results = [remote.import_job(job_id, store, overwrite=overwrite).to_mapping()]
+        else:
+            results = [
+                result.to_mapping()
+                for result in remote.import_session(session_id, store, overwrite=overwrite)
+            ]
+    except RemoteArchiveError as e:
+        raise typer.BadParameter(str(e)) from e
+    _print_remote_archive_results(
+        results,
+        destination=resolved_destination,
+        output_format=output_format,
+        verb="imported",
+    )
+
+
+def _records_for_session(store: Any, session_id: str | None) -> list[Any]:
+    records = [record for record in store.list() if _record_session_id(record) == session_id]
+    if not records:
+        raise typer.BadParameter(f"No local qmb jobs found for session: {session_id}")
+    records.sort(key=lambda record: record.created_at)
+    return records
+
+
+def _print_remote_archive_results(
+    results: list[dict[str, Any]],
+    *,
+    destination: str,
+    output_format: str,
+    verb: str,
+) -> None:
+    payload = {
+        "destination": destination,
+        "count": len(results),
+        "jobs": results,
+    }
+    if output_format == "json":
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    if output_format != "text":
+        raise typer.BadParameter("Invalid format. Use text or json.")
+    for result in results:
+        uri = f" {result['uri']}" if result.get("uri") else ""
+        typer.echo(f"{verb} {result['qmb_job_id']} status:{result['status']}{uri}")
+
+
 def _load_job_or_exit(job_id: str):
     from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
 
@@ -1312,7 +1480,13 @@ def _browse_print_json(
     _stamp("total", _time.perf_counter() - t0)
 
 
-def _execute(request: QueryRequest, *, output_format: Format) -> None:
+def _execute(
+    request: QueryRequest,
+    *,
+    output_format: Format,
+    publish: bool = False,
+    destination: str | None = None,
+) -> None:
     """Run the application pipeline and render the result via a formatter.
 
     ``output_format`` is the parsed ``--format`` value; the CLI dispatches
@@ -1335,7 +1509,61 @@ def _execute(request: QueryRequest, *, output_format: Format) -> None:
         job_store=JobStore(),
         ignore_archive_errors=True,
     )
+    if publish:
+        outcome = _publish_outcome_archive(outcome, destination=destination)
     _render_outcome(outcome, request, output_format=output_format)
+
+
+def _publish_outcome_archive(
+    outcome: ExecutionOutcome,
+    *,
+    destination: str | None = None,
+) -> ExecutionOutcome:
+    """Publish the archived job for a run and attach machine-readable status."""
+    if outcome.dry_run:
+        return replace(
+            outcome,
+            remote_archive={
+                "status": "skipped",
+                "reason": "dry_run",
+                "destination": None,
+                "jobs": [],
+            },
+        )
+    if outcome.archived_job is None:
+        return replace(
+            outcome,
+            remote_archive={
+                "status": "failed",
+                "reason": "local_archive_missing",
+                "destination": None,
+                "jobs": [],
+            },
+        )
+
+    from qmb.config import remote_archive_preview_rows, remote_archive_uri
+    from qmb.jobs.remote import get_remote_archive
+
+    resolved_destination = remote_archive_uri(destination)
+    try:
+        result = get_remote_archive(resolved_destination).export_job(
+            outcome.archived_job,
+            preview_rows=remote_archive_preview_rows(),
+        )
+        payload = {
+            "status": result.status,
+            "destination": resolved_destination,
+            "jobs": [result.to_mapping()],
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "status": "failed",
+            "destination": resolved_destination,
+            "jobs": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return replace(outcome, remote_archive=payload)
 
 
 def _render_outcome(

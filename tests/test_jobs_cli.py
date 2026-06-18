@@ -360,3 +360,153 @@ def test_jobs_open_launches_tui_for_archived_preview(
         {"name": "label", "type": "STRING", "mode": "NULLABLE"}
     ]
     assert captured["result_source"].__class__.__name__ == "JsonlPreviewResultSource"
+
+
+def test_jobs_export_publishes_one_job_with_destination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    first, _second = _seed_jobs(jobs_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    calls: list[tuple[str, str]] = []
+
+    class FakeRemote:
+        def export_job(self, record: Any, *, preview_rows: int | None = None) -> Any:
+            calls.append((record.qmb_job_id, str(preview_rows)))
+            return _FakeRemoteResult(record.qmb_job_id, "exported")
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "jobs",
+            "export",
+            first.qmb_job_id,
+            "--destination",
+            "gs://bucket/qmb/",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output)
+    assert payload["destination"] == "gs://bucket/qmb/"
+    assert payload["jobs"][0]["qmb_job_id"] == first.qmb_job_id
+    assert calls == [(first.qmb_job_id, "500")]
+
+
+def test_jobs_export_publishes_all_jobs_for_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    models, store_module = _jobs_modules()
+    jobs_root = tmp_path / "jobs"
+    store = store_module.JobStore(
+        root=jobs_root,
+        now=_iter_callable(
+            [
+                datetime(2026, 5, 12, 10, 0, tzinfo=UTC),
+                datetime(2026, 5, 12, 11, 0, tzinfo=UTC),
+            ]
+        ),
+        nonce=_iter_callable(["abc111", "def222"]),
+    )
+    first = store.create(
+        resolved_sql="SELECT 1",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 1}],
+        source=models.SourceMetadata(label="first", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="shared",
+    )
+    second = store.create(
+        resolved_sql="SELECT 2",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 2}],
+        source=models.SourceMetadata(label="second", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="shared",
+    )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    exported: list[str] = []
+
+    class FakeRemote:
+        def export_job(self, record: Any, *, preview_rows: int | None = None) -> Any:
+            exported.append(record.qmb_job_id)
+            return _FakeRemoteResult(record.qmb_job_id, "exported")
+
+    monkeypatch.setenv("QMB_REMOTE_ARCHIVE_URI", "gs://env-bucket/qmb/")
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "export", "--session-id", "shared", "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert json.loads(result.output)["destination"] == "gs://env-bucket/qmb/"
+    assert exported == [first.qmb_job_id, second.qmb_job_id]
+
+
+def test_jobs_import_session_uses_remote_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    imported: list[tuple[str, bool]] = []
+
+    class FakeRemote:
+        def import_session(
+            self,
+            session_id: str,
+            store: Any,
+            *,
+            overwrite: bool = False,
+        ) -> list[Any]:
+            imported.append((session_id, overwrite))
+            return [_FakeRemoteResult("qmb_job", "imported")]
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "jobs",
+            "import",
+            "--session-id",
+            "shared",
+            "--destination",
+            "gs://bucket/qmb/",
+            "--overwrite",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output)
+    assert payload["jobs"] == [
+        {
+            "qmb_job_id": "qmb_job",
+            "status": "imported",
+            "uri": "gs://bucket/qmb/sessions/session/qmb_job/",
+            "error": None,
+        }
+    ]
+    assert imported == [("shared", True)]
+
+
+class _FakeRemoteResult:
+    def __init__(self, qmb_job_id: str, status: str) -> None:
+        self.qmb_job_id = qmb_job_id
+        self.status = status
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "qmb_job_id": self.qmb_job_id,
+            "status": self.status,
+            "uri": f"gs://bucket/qmb/sessions/session/{self.qmb_job_id}/",
+            "error": None,
+        }
