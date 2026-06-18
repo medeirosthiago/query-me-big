@@ -9,6 +9,23 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+### Added
+
+- Remote qmb archives for sharing jobs and sessions without re-running
+  BigQuery. New `qmb jobs export` and `qmb jobs import` commands publish/load
+  the existing local archive artifacts (`metadata.json`, `query.sql`,
+  `schema.json`, `preview.jsonl`) to/from GCS under
+  `sessions/<session_id>/<qmb_job_id>/`.
+- `qmb run --publish` to publish the just-created local archive after a
+  successful run, with non-fatal remote archive status surfaced in JSON output
+  as `remote_archive`.
+- Remote archive configuration via `--destination`, `QMB_REMOTE_ARCHIVE_URI`,
+  `~/.qmb/config.toml`, and the built-in default
+  `gs://data-platform-moises-temp/qmb/`. `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS`
+  controls how many local preview rows are copied remotely.
+- The official qmb agent skill now documents remote session sharing and import
+  workflows.
+
 ## [0.5.1] - 2026-06-04
 
 ### Fixed
