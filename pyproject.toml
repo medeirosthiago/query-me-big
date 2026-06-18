@@ -13,6 +13,7 @@ dependencies = [
     "textual>=3.0",
     "rich>=13.0",
     "google-cloud-bigquery>=3.25",
+    "google-cloud-storage>=2.18",
     "pyarrow>=17.0",
     "pyperclip>=1.9",
 ]

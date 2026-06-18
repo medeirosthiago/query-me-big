@@ -22,6 +22,7 @@ Schema written to stdout for ``qmb run`` (non dry-run)::
         "error": str | null
       },
       "export":  {"path": str, "rows": int} | null,
+      "remote_archive": {"status": str, "destination": str, "jobs": list} | null,
       "dry_run": false
     }
 
@@ -121,6 +122,7 @@ class JsonFormatter:
                 if outcome.exported_path is not None
                 else None
             ),
+            "remote_archive": outcome.remote_archive,
         }
 
     def _collect_rows(self, outcome: ExecutionOutcome) -> list[dict[str, Any]]:
