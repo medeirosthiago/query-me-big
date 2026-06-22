@@ -140,11 +140,11 @@ def _seed_many_jobs(root: Path, count: int) -> list[Any]:
     return records
 
 
-def test_jobs_list_defaults_to_ten_with_all_and_limit_overrides(
+def test_jobs_list_defaults_to_fifty_with_all_and_limit_overrides(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     jobs_root = tmp_path / "jobs"
-    records = _seed_many_jobs(jobs_root, 12)
+    records = _seed_many_jobs(jobs_root, 52)
     monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
 
     default_result = CliRunner().invoke(cli.app, ["jobs", "list", "--format", "json"])
@@ -155,13 +155,13 @@ def test_jobs_list_defaults_to_ten_with_all_and_limit_overrides(
 
     assert default_result.exit_code == 0, default_result.output
     default_payload = json.loads(default_result.output)
-    assert len(default_payload) == 10
+    assert len(default_payload) == 50
     assert default_payload[0]["qmb_job_id"] == records[-1].qmb_job_id
     assert default_payload[-1]["qmb_job_id"] == records[2].qmb_job_id
 
     assert all_result.exit_code == 0, all_result.output
     all_payload = json.loads(all_result.output)
-    assert len(all_payload) == 12
+    assert len(all_payload) == 52
     assert all_payload[-1]["qmb_job_id"] == records[0].qmb_job_id
 
     assert limit_result.exit_code == 0, limit_result.output

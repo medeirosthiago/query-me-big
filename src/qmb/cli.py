@@ -602,14 +602,14 @@ def jobs_list(
         typer.Option(
             "--limit",
             "-l",
-            help="Number of records returned, newest first (default: 10; use --all for all).",
+            help="Number of records returned, newest first (default: 50; use --all for all).",
         ),
     ] = None,
     show_all: Annotated[
         bool,
         typer.Option(
             "--all",
-            help="Return all matching jobs instead of the default newest 10.",
+            help="Return all matching jobs instead of the default newest 50.",
         ),
     ] = False,
     agent_name: Annotated[
@@ -661,7 +661,7 @@ def jobs_list(
     if limit is not None and limit < 0:
         raise typer.BadParameter("--limit must be zero or greater.")
 
-    effective_limit = None if show_all else (limit if limit is not None else 10)
+    effective_limit = None if show_all else (limit if limit is not None else 50)
 
     store = JobStore()
     records = _filter_job_records(
