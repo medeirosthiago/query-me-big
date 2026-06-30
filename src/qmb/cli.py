@@ -552,6 +552,18 @@ def history(
         int,
         typer.Option("--limit", "-l", help="Maximum number of queries to fetch"),
     ] = 200,
+    user_email: Annotated[
+        str | None,
+        typer.Option(
+            "--user",
+            "--email",
+            help=(
+                "Filter by user email (e.g. gustavo.leca@moises.ai). Fetches "
+                "all users' jobs and filters client-side; requires "
+                "bigquery.jobs.listAll IAM permission."
+            ),
+        ),
+    ] = None,
     page_size: Annotated[
         int,
         typer.Option("--page-size", help="Rows per page in TUI"),
@@ -569,12 +581,14 @@ def history(
 
     Prints recent BigQuery jobs as a JSON array on stdout by default.
     Pass ``-t`` / ``--tui`` to open the interactive picker instead.
+    By default only the current user's jobs are listed; pass ``--user`` to
+    filter by another user's email (requires ``bigquery.jobs.listAll``).
     """
     from qmb.bigquery.client import get_client
     from qmb.bigquery.history import list_recent_queries
 
     client = get_client(project, location)
-    entries = list_recent_queries(client, days=days, limit=limit)
+    entries = list_recent_queries(client, days=days, limit=limit, user_email=user_email)
 
     if not tui:
         payload = [_history_entry_to_dict(entry) for entry in entries]
@@ -618,6 +632,7 @@ def _history_entry_to_dict(entry: QueryHistoryEntry) -> dict[str, Any]:
         "query": entry.query,
         "bytes_processed": entry.bytes_processed,
         "state": entry.state,
+        "user_email": entry.user_email,
     }
 
 

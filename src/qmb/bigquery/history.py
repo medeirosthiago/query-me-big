@@ -15,6 +15,7 @@ class QueryHistoryEntry:
     query: str
     bytes_processed: int = 0
     state: str = "DONE"
+    user_email: str = ""
 
     @property
     def preview(self) -> str:
@@ -28,13 +29,21 @@ def list_recent_queries(
     *,
     days: int = 7,
     limit: int = 200,
+    user_email: str | None = None,
 ) -> list[QueryHistoryEntry]:
-    """Return recent query jobs for the current user, sorted by created descending."""
+    """Return recent query jobs, sorted by created descending.
+
+    By default only the current authenticated user's jobs are listed
+    (``all_users=False``). When ``user_email`` is set, all users' jobs are
+    fetched (``all_users=True``) and filtered client-side to that user, since
+    BigQuery's ``jobs.list`` API has no server-side user filter.
+    """
     cutoff = datetime.now(UTC) - timedelta(days=days)
+    target = user_email.strip().lower() if user_email and user_email.strip() else None
     entries: list[QueryHistoryEntry] = []
 
     for job in client.list_jobs(
-        all_users=False,
+        all_users=target is not None,
         state_filter="done",
         min_creation_time=cutoff,
         max_results=limit * 3,
@@ -45,6 +54,10 @@ def list_recent_queries(
             continue
         if job.error_result:
             continue
+        if target:
+            job_user = (job.user_email or "").lower()
+            if job_user != target:
+                continue
         query_text = job.query
         if not query_text:
             continue
@@ -57,6 +70,7 @@ def list_recent_queries(
                 query=query_text,
                 bytes_processed=job.total_bytes_processed or 0,
                 state=job.state,
+                user_email=job.user_email or "",
             )
         )
         if len(entries) >= limit:
