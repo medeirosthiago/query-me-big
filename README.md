@@ -531,7 +531,9 @@ Destination precedence is:
 1. `--destination gs://bucket/prefix`
 2. `QMB_REMOTE_ARCHIVE_URI`
 3. `~/.qmb/config.toml`
-4. `gs://your-bucket/qmb/`
+
+When none of these is set, remote archive lookup is disabled and missing local
+jobs/sessions stay missing.
 
 Config file example:
 
@@ -553,6 +555,23 @@ Publish or load later without re-running BigQuery:
 qmb jobs export --session-id agent-42
 qmb jobs import --session-id agent-42
 ```
+
+Agents can usually skip the explicit import step. If a job is not present in
+the local archive, these commands try the configured remote archive and then
+continue against the imported local copy:
+
+```bash
+qmb jobs show <qmb_job_id> --format json
+qmb jobs sql <qmb_job_id>
+qmb jobs paths <qmb_job_id> --format json
+qmb jobs open <qmb_job_id>
+```
+
+Likewise, `qmb jobs list --session-id <session_id>` tries to import the remote
+session first when no local jobs exist for that session. Remote lookup prints a
+short `qmb: importing remote ...` notice to stderr so stdout remains usable for
+JSON/SQL output. Pass `--destination gs://bucket/prefix` to override env/config
+for any of these lookups.
 
 Remote archives preserve `qmb_job_id` and mirror the local artifact names under
 `sessions/<session_id>/<qmb_job_id>/`, so imported jobs work with the same local

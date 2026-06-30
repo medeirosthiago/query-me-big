@@ -327,6 +327,159 @@ def test_jobs_paths_json_returns_artifact_paths_for_nvim(
     }
 
 
+def test_jobs_sql_auto_imports_missing_job_from_remote(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import shutil
+
+    source_root = tmp_path / "remote-source"
+    jobs_root = tmp_path / "jobs"
+    _first, remote_record = _seed_jobs(source_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    destinations: list[str] = []
+
+    class FakeRemote:
+        def import_job(self, job_id: str, store: Any, *, overwrite: bool = False) -> Any:
+            assert job_id == "def222"
+            assert overwrite is False
+            store.root.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(remote_record.directory, store.root / remote_record.qmb_job_id)
+            return _FakeRemoteResult(remote_record.qmb_job_id, "imported")
+
+    def fake_remote(destination: str) -> FakeRemote:
+        destinations.append(destination)
+        return FakeRemote()
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", fake_remote)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "sql", "def222", "--destination", "gs://bucket/qmb/"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert result.output == (
+        "qmb: importing remote job def222 from gs://bucket/qmb/\n"
+        "SELECT 'second' AS label\n"
+    )
+    assert destinations == ["gs://bucket/qmb/"]
+    assert (jobs_root / remote_record.qmb_job_id / "metadata.json").exists()
+
+
+def test_jobs_show_does_not_try_remote_for_local_job(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    first, _second = _seed_jobs(jobs_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    monkeypatch.setattr(
+        "qmb.jobs.remote.get_remote_archive",
+        lambda destination: pytest.fail("remote should not be used for local jobs"),
+    )
+
+    result = CliRunner().invoke(cli.app, ["jobs", "show", first.qmb_job_id])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert first.qmb_job_id in result.output
+
+
+def test_jobs_list_auto_imports_missing_session_from_remote(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import shutil
+
+    models, store_module = _jobs_modules()
+    source_root = tmp_path / "remote-source"
+    jobs_root = tmp_path / "jobs"
+    source_store = store_module.JobStore(
+        root=source_root,
+        now=lambda: datetime(2026, 5, 12, 10, 0, tzinfo=UTC),
+        nonce=lambda: "abc123",
+    )
+    remote_record = source_store.create(
+        resolved_sql="SELECT 1",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 1}],
+        source=models.SourceMetadata(label="remote", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="shared",
+    )
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    imported: list[str] = []
+
+    class FakeRemote:
+        def import_session(
+            self,
+            session_id: str,
+            store: Any,
+            *,
+            overwrite: bool = False,
+        ) -> list[Any]:
+            imported.append(session_id)
+            store.root.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(remote_record.directory, store.root / remote_record.qmb_job_id)
+            return [_FakeRemoteResult(remote_record.qmb_job_id, "imported")]
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "jobs",
+            "list",
+            "--session-id",
+            "shared",
+            "--format",
+            "json",
+            "--destination",
+            "gs://bucket/qmb/",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    notice, json_payload = result.output.split("\n", 1)
+    assert notice == "qmb: importing remote session shared from gs://bucket/qmb/"
+    payload = json.loads(json_payload)
+    assert [record["qmb_job_id"] for record in payload] == [remote_record.qmb_job_id]
+    assert imported == ["shared"]
+
+
+def test_jobs_list_missing_session_stays_local_without_remote_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    monkeypatch.delenv("QMB_REMOTE_ARCHIVE_URI", raising=False)
+    monkeypatch.setattr("qmb.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "qmb.jobs.remote.get_remote_archive",
+        lambda destination: pytest.fail("remote should not be used without config"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "list", "--session-id", "missing"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert result.output == "No local qmb jobs found.\n"
+    assert result.stderr == ""
+
+
+def test_jobs_sql_missing_job_explains_remote_not_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.delenv("QMB_REMOTE_ARCHIVE_URI", raising=False)
+    monkeypatch.setattr("qmb.config.load_config", lambda: {})
+
+    result = CliRunner().invoke(cli.app, ["jobs", "sql", "missing"])
+
+    assert result.exit_code != 0
+    assert "Remote lookup is not configured" in result.stderr
+
+
 def test_jobs_open_launches_tui_for_archived_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

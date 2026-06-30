@@ -199,13 +199,25 @@ qmb jobs import "$qmb_job_id"
 qmb jobs import --session-id "$SID"
 ```
 
-Imported jobs preserve their original `qmb_job_id`, so use the normal local archive commands after import:
+Agents can usually skip the explicit import step. If a job is missing locally,
+these commands try the configured remote archive automatically and then continue
+against the imported local copy:
 
 ```bash
 qmb jobs list --all --format json --session-id "$SID"
 qmb jobs sql "$qmb_job_id"
 qmb jobs open "$qmb_job_id"
 ```
+
+`qmb jobs list --session-id "$SID"` also tries to import the remote session
+when no local jobs exist for that session. Remote lookup prints a short
+`qmb: importing remote ...` notice to stderr while stdout remains usable for
+JSON or SQL output.
+
+Imported jobs preserve their original `qmb_job_id`, so normal local archive
+commands work after import. Use `--destination gs://bucket/prefix` on
+`jobs show`, `jobs sql`, `jobs paths`, `jobs open`, `jobs list`, or
+`jobs import` when a specific remote archive should override env/config.
 
 Remote layout:
 

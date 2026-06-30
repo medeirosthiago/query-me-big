@@ -680,8 +680,22 @@ def jobs_list(
         str | None,
         typer.Option("--query", help="Only show jobs whose archived SQL contains this text."),
     ] = None,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help=(
+                "Remote archive URI used to auto-import --session-id when "
+                "the session is missing locally."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """List local qmb job archives."""
+    """List qmb job archives.
+
+    When --session-id has no local matches, tries to import the session from
+    the configured remote archive before listing.
+    """
     from qmb.jobs.store import JobStore
 
     if output_format not in {"text", "json"}:
@@ -694,8 +708,15 @@ def jobs_list(
     effective_limit = None if show_all else (limit if limit is not None else 50)
 
     store = JobStore()
+    all_records = store.list()
+    session_missing = session_id is not None and not any(
+        _record_session_id(record) == session_id for record in all_records
+    )
+    if session_missing:
+        _try_import_remote_session(session_id, store, destination=destination)
+        all_records = store.list()
     records = _filter_job_records(
-        store.list(),
+        all_records,
         session_id=session_id,
         parent_job_id=parent_job_id,
         agent_name=agent_name,
@@ -977,9 +998,20 @@ def jobs_show(
         str,
         typer.Option("--format", help="Output format: text or json"),
     ] = "text",
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive URI used if the job is missing locally.",
+        ),
+    ] = None,
 ) -> None:
-    """Show metadata for a local qmb job."""
-    record = _load_job_or_exit(job_id)
+    """Show metadata for a qmb job.
+
+    Imports the job from the configured remote archive first if it is missing
+    locally.
+    """
+    record = _load_job_or_exit(job_id, destination=destination)
     if output_format == "json":
         typer.echo(json.dumps(record.to_metadata(), indent=2))
         return
@@ -999,9 +1031,20 @@ def jobs_show(
 @jobs_app.command("sql")
 def jobs_sql(
     job_id: Annotated[str, typer.Argument(help="Full or partial qmb job ID")],
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive URI used if the job is missing locally.",
+        ),
+    ] = None,
 ) -> None:
-    """Print the archived resolved SQL for a local qmb job."""
-    record = _load_job_or_exit(job_id)
+    """Print the archived resolved SQL for a qmb job.
+
+    Imports the job from the configured remote archive first if it is missing
+    locally.
+    """
+    record = _load_job_or_exit(job_id, destination=destination)
     typer.echo(record.query_path.read_text(encoding="utf-8"))
 
 
@@ -1012,13 +1055,24 @@ def jobs_open(
         int,
         typer.Option("--page-size", help="Rows per page in TUI"),
     ] = 200,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive URI used if the job is missing locally.",
+        ),
+    ] = None,
 ) -> None:
-    """Open an archived qmb job preview in the TUI."""
+    """Open an archived qmb job's row preview in the TUI.
+
+    Imports the job from the configured remote archive first if it is missing
+    locally.
+    """
     from qmb.jobs.result_source import JsonlPreviewResultSource
     from qmb.tui.app import QueryResultApp
     from qmb.types import QueryResultHandle
 
-    record = _load_job_or_exit(job_id)
+    record = _load_job_or_exit(job_id, destination=destination)
     source = JsonlPreviewResultSource.from_job(record)
     schema = record.schema or []
     handle = QueryResultHandle(
@@ -1049,9 +1103,20 @@ def jobs_paths(
         str,
         typer.Option("--format", help="Output format: text or json"),
     ] = "text",
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help="Remote archive URI used if the job is missing locally.",
+        ),
+    ] = None,
 ) -> None:
-    """Print artifact paths for a local qmb job."""
-    record = _load_job_or_exit(job_id)
+    """Print artifact paths for a qmb job.
+
+    Imports the job from the configured remote archive first if it is missing
+    locally.
+    """
+    record = _load_job_or_exit(job_id, destination=destination)
     paths = record.artifact_paths()
     if output_format == "json":
         typer.echo(json.dumps(paths, indent=2))
@@ -1217,13 +1282,56 @@ def _print_remote_archive_results(
         typer.echo(f"{verb} {result['qmb_job_id']} status:{result['status']}{uri}")
 
 
-def _load_job_or_exit(job_id: str):
-    from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
+def _try_import_remote_session(session_id: str, store: Any, *, destination: str | None) -> None:
+    from qmb.config import remote_archive_uri
+    from qmb.jobs.remote import get_remote_archive
+
+    resolved_destination = remote_archive_uri(destination)
+    if resolved_destination is None:
+        return
 
     try:
-        return JobStore().read(job_id)
-    except JobNotFoundError as e:
-        raise typer.BadParameter(str(e)) from e
+        typer.echo(
+            f"qmb: importing remote session {session_id} from {resolved_destination}",
+            err=True,
+        )
+        remote = get_remote_archive(resolved_destination)
+        remote.import_session(session_id, store, overwrite=False)
+    except Exception:
+        # Listing remains a local command when the remote session is absent or
+        # unavailable. Point lookups surface remote failures more explicitly.
+        return
+
+
+def _load_job_or_exit(job_id: str, *, destination: str | None = None):
+    from qmb.config import remote_archive_uri
+    from qmb.jobs.remote import get_remote_archive
+    from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
+
+    store = JobStore()
+    try:
+        return store.read(job_id)
+    except JobNotFoundError as local_error:
+        resolved_destination = remote_archive_uri(destination)
+        if resolved_destination is None:
+            raise typer.BadParameter(
+                f"{local_error}. Remote lookup is not configured; set --destination, "
+                "QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri in ~/.qmb/config.toml."
+            ) from local_error
+        try:
+            typer.echo(
+                f"qmb: importing remote job {job_id} from {resolved_destination}",
+                err=True,
+            )
+            remote = get_remote_archive(resolved_destination)
+            result = remote.import_job(job_id, store, overwrite=False)
+            return store.read(result.qmb_job_id)
+        except Exception as remote_error:
+            raise typer.BadParameter(
+                f"{local_error}. Remote lookup failed: {remote_error}"
+            ) from remote_error
+        except JobNotFoundError as imported_error:
+            raise typer.BadParameter(str(imported_error)) from imported_error
     except AmbiguousJobIdError as e:
         raise typer.BadParameter(str(e)) from e
 
