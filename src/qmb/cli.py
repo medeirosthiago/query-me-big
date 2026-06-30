@@ -284,7 +284,11 @@ def run(
         bool,
         typer.Option(
             "--publish",
-            help="Publish the local qmb job archive to remote storage after a successful run.",
+            help=(
+                "Publish the local qmb job archive to remote storage after a successful run. "
+                "Requires a configured destination (--destination, QMB_REMOTE_ARCHIVE_URI, "
+                "or [remote_archive].uri in ~/.qmb/config.toml)."
+            ),
         ),
     ] = False,
     destination: Annotated[
@@ -292,8 +296,9 @@ def run(
         typer.Option(
             "--destination",
             help=(
-                "Remote archive destination URI. Defaults to QMB_REMOTE_ARCHIVE_URI, "
-                "~/.qmb/config.toml, or qmb's shared GCS default."
+                "Remote archive destination URI for --publish. Defaults to "
+                "QMB_REMOTE_ARCHIVE_URI or ~/.qmb/config.toml; required when --publish "
+                "is set and neither is configured."
             ),
         ),
     ] = None,
@@ -513,6 +518,16 @@ def run(
         parent_job_id=parent_job_id,
         agent_context=agent_context,
     )
+
+    if publish and not dry_run:
+        from qmb.config import remote_archive_uri
+
+        if remote_archive_uri(destination) is None:
+            raise typer.BadParameter(
+                "Remote archive destination is not configured, but --publish was set. "
+                "Set --destination, QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri "
+                "in ~/.qmb/config.toml before running the query."
+            )
 
     _execute(request, output_format=selected_format, publish=publish, destination=destination)
 
