@@ -488,6 +488,15 @@ def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:
             assert ref == "proj.analytics"
             return FakeDataset()
 
+        def list_tables(self, ref):
+            assert ref == "proj.analytics"
+            from types import SimpleNamespace
+            return [
+                SimpleNamespace(table_id="orders"),
+                SimpleNamespace(table_id="events"),
+                SimpleNamespace(table_id="users"),
+            ]
+
     monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
 
     result = CliRunner().invoke(cli.app, ["describe", "analytics"])
@@ -497,6 +506,7 @@ def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:
     assert payload["kind"] == "dataset"
     assert payload["dataset"]["location"] == "US"
     assert payload["dataset"]["description"] == "Production analytics"
+    assert payload["tables"] == ["events", "orders", "users"]
 
 
 def test_describe_table_prints_api_repr_as_json(monkeypatch) -> None:
