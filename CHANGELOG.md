@@ -23,6 +23,11 @@ behavior changes are called out explicitly).
   or `~/.qmb/config.toml`. Remote archive lookup is disabled when no
   destination is configured. `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS` controls how
   many local preview rows are copied remotely.
+- Missing local job lookups now fall back to the configured remote archive for
+  `qmb jobs show`, `qmb jobs sql`, `qmb jobs paths`, and `qmb jobs open`;
+  `qmb jobs list --session-id` similarly tries to import a missing remote
+  session before listing it locally. Remote lookup prints a short notice to
+  stderr before importing.
 - The official qmb agent skill now documents remote session sharing and import
   workflows.
 
