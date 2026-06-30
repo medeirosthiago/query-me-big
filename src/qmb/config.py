@@ -7,7 +7,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REMOTE_ARCHIVE_URI = "gs://your-bucket/qmb/"
 DEFAULT_REMOTE_ARCHIVE_PREVIEW_ROWS = 500
 
 
@@ -26,11 +25,11 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def remote_archive_uri(destination: str | None = None) -> str:
+def remote_archive_uri(destination: str | None = None) -> str | None:
     """Resolve the remote archive destination URI.
 
     Precedence is CLI destination, ``QMB_REMOTE_ARCHIVE_URI``,
-    ``~/.qmb/config.toml``, then qmb's built-in shared GCS location.
+    then ``~/.qmb/config.toml``. Remote archives are disabled when unset.
     """
     if destination:
         return destination
@@ -42,7 +41,7 @@ def remote_archive_uri(destination: str | None = None) -> str:
         uri = remote_config.get("uri")
         if isinstance(uri, str) and uri.strip():
             return uri
-    return DEFAULT_REMOTE_ARCHIVE_URI
+    return None
 
 
 def remote_archive_preview_rows() -> int:

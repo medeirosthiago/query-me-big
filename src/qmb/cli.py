@@ -1077,7 +1077,10 @@ def jobs_export(
         str | None,
         typer.Option(
             "--destination",
-            help="Remote archive destination URI.",
+            help=(
+                "Remote archive destination URI. Required when QMB_REMOTE_ARCHIVE_URI "
+                "and ~/.qmb/config.toml are unset."
+            ),
         ),
     ] = None,
     output_format: Annotated[
@@ -1101,6 +1104,11 @@ def jobs_export(
             else _records_for_session(store, session_id)
         )
         resolved_destination = remote_archive_uri(destination)
+        if resolved_destination is None:
+            raise typer.BadParameter(
+                "Remote archive destination is not configured. Set --destination, "
+                "QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri in ~/.qmb/config.toml."
+            )
         remote = get_remote_archive(resolved_destination)
         results = [
             remote.export_job(record, preview_rows=remote_archive_preview_rows()).to_mapping()
@@ -1130,7 +1138,10 @@ def jobs_import(
         str | None,
         typer.Option(
             "--destination",
-            help="Remote archive destination URI.",
+            help=(
+                "Remote archive destination URI. Required when QMB_REMOTE_ARCHIVE_URI "
+                "and ~/.qmb/config.toml are unset."
+            ),
         ),
     ] = None,
     overwrite: Annotated[
@@ -1152,6 +1163,11 @@ def jobs_import(
 
     try:
         resolved_destination = remote_archive_uri(destination)
+        if resolved_destination is None:
+            raise typer.BadParameter(
+                "Remote archive destination is not configured. Set --destination, "
+                "QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri in ~/.qmb/config.toml."
+            )
         remote = get_remote_archive(resolved_destination)
         store = JobStore()
         if job_id is not None:
@@ -1544,8 +1560,13 @@ def _publish_outcome_archive(
     from qmb.config import remote_archive_preview_rows, remote_archive_uri
     from qmb.jobs.remote import get_remote_archive
 
-    resolved_destination = remote_archive_uri(destination)
     try:
+        resolved_destination = remote_archive_uri(destination)
+        if resolved_destination is None:
+            raise ValueError(
+                "Remote archive destination is not configured. Set --destination, "
+                "QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri in ~/.qmb/config.toml."
+            )
         result = get_remote_archive(resolved_destination).export_job(
             outcome.archived_job,
             preview_rows=remote_archive_preview_rows(),
