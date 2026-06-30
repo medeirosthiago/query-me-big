@@ -156,7 +156,7 @@ Metadata includes an `agent` object with fields such as:
 
 ## 6. Share and load sessions
 
-Remote archives let agents and teammates share qmb jobs without re-running BigQuery. The default remote archive destination is:
+Remote archives let agents and teammates share qmb jobs without re-running BigQuery. Configure a remote archive destination explicitly, for example:
 
 ```text
 gs://data-platform-moises-temp/qmb/
@@ -167,7 +167,9 @@ Destination precedence:
 1. `--destination gs://bucket/prefix`
 2. `QMB_REMOTE_ARCHIVE_URI`
 3. `~/.qmb/config.toml`
-4. `gs://data-platform-moises-temp/qmb/`
+
+When none of these is set, remote archive lookup is disabled and missing local
+jobs/sessions stay missing.
 
 Config file example:
 
