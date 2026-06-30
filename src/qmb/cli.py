@@ -1390,9 +1390,15 @@ def describe(
 
     The output mirrors the BigQuery REST API representation: schema,
     partitioning, clustering, sizes, timestamps, labels, descriptions,
-    and so on. Use this in place of ``bq show --format prettyjson``.
+    and so on. For a dataset target, a top-level ``tables`` array lists
+    the table ids inside it (sorted alphabetically, case-insensitive).
+    Use this in place of ``bq show --format prettyjson``.
     """
-    from qmb.bigquery.catalog import get_dataset_metadata, get_table_metadata
+    from qmb.bigquery.catalog import (
+        get_dataset_metadata,
+        get_table_metadata,
+        list_dataset_tables,
+    )
     from qmb.bigquery.client import get_client
 
     client = get_client(project, location)
@@ -1403,7 +1409,11 @@ def describe(
     parts = normalized.split(".")
     if len(parts) == 1:
         dataset = get_dataset_metadata(client, parts[0])
-        payload = {"kind": "dataset", "dataset": dataset.to_api_repr()}
+        payload = {
+            "kind": "dataset",
+            "dataset": dataset.to_api_repr(),
+            "tables": list(list_dataset_tables(client, parts[0])),
+        }
     elif len(parts) == 2:
         table = get_table_metadata(client, parts[0], parts[1])
         payload = {"kind": "table", "table": table.to_api_repr()}
