@@ -146,7 +146,7 @@ Run a BigQuery query. Default output: a single JSON object on stdout. Pass
 | `--export csv\|json\|parquet` | `-e` | Also export full results to a file. |
 | `--out PATH` | `-o` | Export output path (defaults to `output.<ext>`). |
 | `--publish` | | Publish the local qmb archive for this run to remote storage. |
-| `--destination URI` | | Remote archive URI for `--publish`. Defaults to `QMB_REMOTE_ARCHIVE_URI`, `~/.qmb/config.toml`, or `gs://your-bucket/qmb/`. |
+| `--destination URI` | | Remote archive URI for `--publish`. Defaults to `QMB_REMOTE_ARCHIVE_URI` or `~/.qmb/config.toml`; remote archive is disabled when unset. |
 | `--where CLAUSE` | `-w` | Wrap the resolved SQL in a subquery with this `WHERE`. |
 | `--dry-run` | | Validate + estimate bytes without executing or archiving. |
 | `--max-bytes-billed N` | | BigQuery safety limit (bytes). |
@@ -255,42 +255,49 @@ JSON output includes `session_id`, `count`, `first`, `latest`, `agents`, and
 
 ### `qmb jobs show JOB_ID`
 
-Print metadata for one archived job.
+Print metadata for one archived job. If the job is missing locally, qmb tries
+to import it from the configured remote archive first.
 
 | Flag | Description |
 |---|---|
 | `JOB_ID` (positional, required) | Full or unambiguous-prefix qmb job id. |
 | `--format text\|json` | Output format (default `text`). |
+| `--destination URI` | Remote archive URI used if the job is missing locally. |
 
 ### `qmb jobs sql JOB_ID`
 
-Print the archived resolved SQL for a local qmb job — exact text that was
-sent to BigQuery (post-dbt resolution, post-`--where` wrap).
+Print the archived resolved SQL for a qmb job — exact text that was sent to
+BigQuery (post-dbt resolution, post-`--where` wrap). If the job is missing
+locally, qmb tries to import it from the configured remote archive first.
 
 ### `qmb jobs paths JOB_ID`
 
 Print the absolute filesystem paths to each artifact (`metadata.json`,
-`query.sql`, `schema.json`, `preview.jsonl`).
+`query.sql`, `schema.json`, `preview.jsonl`). If the job is missing locally,
+qmb tries to import it from the configured remote archive first.
 
 | Flag | Description |
 |---|---|
 | `--format text\|json` | Output format (default `text`). |
+| `--destination URI` | Remote archive URI used if the job is missing locally. |
 
 ### `qmb jobs open JOB_ID`
 
 Open an archived job's row preview in the Textual TUI without re-running the
-query. The interactive verb — always TUI-first.
+query. If the job is missing locally, qmb tries to import it from the
+configured remote archive first. The interactive verb — always TUI-first.
 
 | Flag | Description |
 |---|---|
 | `--page-size N` | Rows per page in the TUI (default `200`). |
+| `--destination URI` | Remote archive URI used if the job is missing locally. |
 
 ### `qmb jobs export [JOB_ID]`
 
 Publish local qmb archive artifacts to remote storage without re-running the
 query. Provide either `JOB_ID` or `--session-id`.
 
-Default destination: `gs://your-bucket/qmb/`.
+Example destination: `gs://your-bucket/qmb/`.
 
 Remote layout:
 
@@ -306,7 +313,7 @@ gs://your-bucket/qmb/sessions/<session_id>/<qmb_job_id>/
 |---|---|
 | `JOB_ID` (optional positional) | Full or partial qmb job id to publish. |
 | `--session-id ID` / `--session ID` | Publish every local job in a session. |
-| `--destination URI` | Remote archive URI. Defaults through CLI/env/config/built-in precedence. |
+| `--destination URI` | Remote archive URI. Defaults through env/config; required when no remote archive is configured. |
 | `--format text\|json` | Output format (default `text`). |
 
 ### `qmb jobs import [JOB_ID]`
@@ -319,7 +326,7 @@ Provide either `JOB_ID` or `--session-id`.
 |---|---|
 | `JOB_ID` (optional positional) | Full or partial remote qmb job id to import. |
 | `--session-id ID` / `--session ID` | Import every remote job in a session. |
-| `--destination URI` | Remote archive URI. Defaults through CLI/env/config/built-in precedence. |
+| `--destination URI` | Remote archive URI. Defaults through env/config; required when no remote archive is configured. |
 | `--overwrite` | Replace an existing local job archive with the remote copy. Without this, existing jobs are skipped. |
 | `--format text\|json` | Output format (default `text`). |
 
@@ -513,7 +520,7 @@ job id, and the SQL text — so you can search for `users`, a session id, or
 ### Remote archive sharing
 
 qmb can mirror local job archives to remote storage for sharing with other
-developers or agents. The built-in destination is:
+developers or agents. Configure a destination explicitly, for example:
 
 ```text
 gs://your-bucket/qmb/

@@ -20,9 +20,9 @@ behavior changes are called out explicitly).
   successful run, with non-fatal remote archive status surfaced in JSON output
   as `remote_archive`.
 - Remote archive configuration via `--destination`, `QMB_REMOTE_ARCHIVE_URI`,
-  `~/.qmb/config.toml`, and the built-in default
-  `gs://your-bucket/qmb/`. `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS`
-  controls how many local preview rows are copied remotely.
+  or `~/.qmb/config.toml`. Remote archive lookup is disabled when no
+  destination is configured. `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS` controls how
+  many local preview rows are copied remotely.
 - The official qmb agent skill now documents remote session sharing and import
   workflows.
 
