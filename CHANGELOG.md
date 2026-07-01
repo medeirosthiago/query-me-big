@@ -9,13 +9,52 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+_No released changes yet._
+
+## [0.6.0] - 2026-07-01
+
+**Headline change — flat remote archive layout + session manifests.**
+Remote job archives now live at `gs://bucket/prefix/<qmb_job_id>/` (mirroring
+the local flat layout exactly) instead of the old nested
+`sessions/<session_id>/<qmb_job_id>/`. A regenerable session manifest
+(`sessions/<session_id>.json`) indexes each session's job ids plus cached
+aggregates. Import-by-id is now O(1) (direct path check); session-level
+commands (`jobs sessions`, `jobs list --session-id`, `jobs import --session-id`)
+read the manifest first and fall back to a full scan only when it is missing.
+
+### Changed
+
+- **Breaking:** remote archive layout is flat. `export_job` writes artifacts to
+  `<prefix>/<qmb_job_id>/` and updates `sessions/<session_id>.json`.
+  `import_job` does an O(1) direct path check for full ids (partial ids still
+  fall back to a prefix list). `import_session` reads the remote session
+  manifest for its job-id list, falling back to a full scan when the manifest
+  is missing. Existing remote archives written with the old nested layout are
+  not migrated — re-export with `qmb jobs export`.
+- `qmb jobs sessions` is now backed by session manifests (one file read per
+  session) instead of scanning every job directory. It falls back to a
+  full-scan rebuild when the `sessions/` directory is missing or empty, so
+  older archives that predate manifests keep working.
+- `qmb jobs list --session-id` and `qmb jobs export/import --session-id` now
+  read job ids from the manifest instead of scanning and filtering all jobs.
+- `qmb run --publish` now fails fast with a clear error when no remote
+  destination is configured (`--destination`, `QMB_REMOTE_ARCHIVE_URI`, or
+  `[remote_archive].uri`), instead of running the query and failing at publish
+  time.
+
 ### Added
 
+- Session manifests: `~/.qmb/jobs/sessions/<session_id>.json` (local) and
+  `sessions/<session_id>.json` (remote). Written on `qmb run`, `jobs export`,
+  and `jobs import`. Never the source of truth — `metadata.json` inside each
+  job remains authoritative for that job's `session_id`.
+- `qmb jobs reindex` — rebuild every local session manifest from a full job
+  scan. Useful after upgrading from a pre-manifest qmb version or after
+  manually editing/removing job directories. Supports `--format text|json`.
 - Remote qmb archives for sharing jobs and sessions without re-running
-  BigQuery. New `qmb jobs export` and `qmb jobs import` commands publish/load
-  the existing local archive artifacts (`metadata.json`, `query.sql`,
-  `schema.json`, `preview.jsonl`) to/from GCS under
-  `sessions/<session_id>/<qmb_job_id>/`.
+  BigQuery. `qmb jobs export` and `qmb jobs import` publish/load the existing
+  local archive artifacts (`metadata.json`, `query.sql`, `schema.json`,
+  `preview.jsonl`) to/from GCS. Provide `JOB_ID` or `--session-id`.
 - `qmb run --publish` to publish the just-created local archive after a
   successful run, with non-fatal remote archive status surfaced in JSON output
   as `remote_archive`.
@@ -28,7 +67,13 @@ behavior changes are called out explicitly).
   `qmb jobs list --session-id` similarly tries to import a missing remote
   session before listing it locally. Remote lookup prints a short notice to
   stderr before importing.
-- The official qmb agent skill now documents remote session sharing and import
+- `qmb history --user EMAIL` / `--email EMAIL` filters recent BigQuery jobs by
+  another user's email (requires `bigquery.jobs.listAll`; fetches all users'
+  jobs and filters client-side).
+- `qmb describe <dataset>` now includes a top-level `tables` array listing the
+  table ids inside the dataset (sorted alphabetically, case-insensitive), so
+  one call inspects a dataset and its tables.
+- The official qmb agent skill documents remote session sharing and import
   workflows.
 
 ## [0.5.1] - 2026-06-04
