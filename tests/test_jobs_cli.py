@@ -644,7 +644,7 @@ def test_jobs_import_session_uses_remote_archive(
         {
             "qmb_job_id": "qmb_job",
             "status": "imported",
-            "uri": "gs://bucket/qmb/sessions/session/qmb_job/",
+            "uri": "gs://bucket/qmb/qmb_job/",
             "error": None,
         }
     ]
@@ -660,6 +660,6 @@ class _FakeRemoteResult:
         return {
             "qmb_job_id": self.qmb_job_id,
             "status": self.status,
-            "uri": f"gs://bucket/qmb/sessions/session/{self.qmb_job_id}/",
+            "uri": f"gs://bucket/qmb/{self.qmb_job_id}/",
             "error": None,
         }

@@ -76,7 +76,7 @@ def test_run_publish_exports_archived_job_and_reports_remote_status(
             return {
                 "qmb_job_id": self.qmb_job_id,
                 "status": self.status,
-                "uri": f"gs://bucket/qmb/sessions/agent-42/{self.qmb_job_id}/",
+                "uri": f"gs://bucket/qmb/{self.qmb_job_id}/",
                 "error": None,
             }
 
