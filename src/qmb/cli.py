@@ -1260,6 +1260,36 @@ def jobs_import(
     )
 
 
+@jobs_app.command("reindex")
+def jobs_reindex(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json"),
+    ] = "text",
+) -> None:
+    """Rebuild local session manifests from existing job archives.
+
+    Useful after upgrading from a pre-manifest qmb version or after manually
+    editing/removing job directories. Reads every job, regroups by session,
+    and writes ``~/.qmb/jobs/sessions/<session_id>.json`` for each session.
+    """
+    from qmb.jobs.store import JobStore
+
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("Invalid format. Use text or json.")
+
+    store = JobStore()
+    count = store.reindex()
+
+    if output_format == "json":
+        typer.echo(json.dumps({"sessions_rebuilt": count}, indent=2))
+        return
+    if count == 0:
+        typer.echo("No qmb sessions found to reindex.")
+        return
+    typer.echo(f"Rebuilt {count} session manifest(s).")
+
+
 def _records_for_session(store: Any, session_id: str | None) -> list[Any]:
     job_ids = store.list_session_job_ids(session_id) if session_id else []
     if not job_ids:
