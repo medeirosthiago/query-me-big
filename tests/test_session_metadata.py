@@ -47,7 +47,11 @@ def test_run_session_flags_propagate_into_archive_and_json(
     assert archive["session_id"] == "agent-42"
     assert archive["parent_job_id"] == "20260101T120000-abc12345"
     # And it is also persisted to disk in metadata.json.
-    job_dir = next((tmp_path / "jobs").iterdir())
+    job_dir = next(
+        child
+        for child in (tmp_path / "jobs").iterdir()
+        if child.is_dir() and child.name != "sessions"
+    )
     metadata = json.loads((job_dir / "metadata.json").read_text())
     assert metadata["session_id"] == "agent-42"
     assert metadata["parent_job_id"] == "20260101T120000-abc12345"
@@ -376,7 +380,11 @@ def test_run_env_session_and_agent_metadata_persist(
         "manual": True,
     }
 
-    job_dir = next((tmp_path / "jobs").iterdir())
+    job_dir = next(
+        child
+        for child in (tmp_path / "jobs").iterdir()
+        if child.is_dir() and child.name != "sessions"
+    )
     metadata = json.loads((job_dir / "metadata.json").read_text())
     assert metadata["session_id"] == "pi-session-env"
     assert metadata["agent"] == archive["agent"]
