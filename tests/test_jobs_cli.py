@@ -663,3 +663,67 @@ class _FakeRemoteResult:
             "uri": f"gs://bucket/qmb/{self.qmb_job_id}/",
             "error": None,
         }
+
+
+def test_jobs_reindex_rebuilds_manifests_from_existing_jobs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`qmb jobs reindex` rebuilds session manifests from a full scan."""
+    import shutil as _shutil
+
+    from qmb.jobs.models import EngineMetadata, SourceMetadata
+    from qmb.jobs.store import JobStore
+
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    store = JobStore(
+        root=jobs_root,
+        now=_iter_callable(
+            [
+                datetime(2026, 5, 12, 10, 0, tzinfo=UTC),
+                datetime(2026, 5, 12, 11, 0, tzinfo=UTC),
+            ]
+        ),
+        nonce=_iter_callable(["abc111", "def222"]),
+    )
+    models, _ = _jobs_modules()
+    store.create(
+        resolved_sql="SELECT 1",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 1}],
+        source=models.SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="alpha",
+        agent_context=AgentContext(name="pi", session_id="alpha"),
+    )
+    store.create(
+        resolved_sql="SELECT 2",
+        schema=[SchemaField("x", "INTEGER")],
+        preview_rows=[{"x": 2}],
+        source=models.SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery"),
+        total_rows=1,
+        session_id="beta",
+    )
+    # Wipe manifests to simulate a pre-manifest archive.
+    _shutil.rmtree(store.sessions_dir())
+
+    result = CliRunner().invoke(cli.app, ["jobs", "reindex", "--format", "json"])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    payload = json.loads(result.output)
+    assert payload == {"sessions_rebuilt": 2}
+    assert store.manifest_path_for("alpha").is_file()
+    assert store.manifest_path_for("beta").is_file()
+
+
+def test_jobs_reindex_reports_nothing_when_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+
+    result = CliRunner().invoke(cli.app, ["jobs", "reindex"])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert "No qmb sessions" in result.output
