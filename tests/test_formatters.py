@@ -218,7 +218,7 @@ def test_json_formatter_includes_remote_archive_status() -> None:
                 {
                     "qmb_job_id": "qmb_2026-01-01_12-00-00_abc123",
                     "status": "exported",
-                    "uri": "gs://bucket/qmb/sessions/session/qmb_2026-01-01_12-00-00_abc123/",
+                    "uri": "gs://bucket/qmb/qmb_2026-01-01_12-00-00_abc123/",
                     "error": None,
                 }
             ],
