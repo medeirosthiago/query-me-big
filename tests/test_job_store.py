@@ -233,3 +233,180 @@ def test_missing_and_corrupt_jobs_raise_predictable_errors(tmp_path: Path) -> No
 
     with pytest.raises(store_module.CorruptJobError):
         store.read("qmb_corrupt")
+
+
+# -- Session manifest integration -----------------------------------------------
+
+
+def _create_with_session(
+    store: Any,
+    *,
+    session_id: str | None,
+    agent_context: AgentContext | None = None,
+    bytes_processed: int = 2048,
+    sql: str = "SELECT 1 AS id",
+) -> Any:
+    models, _ = _jobs_modules()
+    return store.create(
+        resolved_sql=sql,
+        schema=[SchemaField("id", "INTEGER")],
+        preview_rows=[{"id": 1}],
+        source=models.SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=models.EngineMetadata(name="bigquery", job_id="bq-1", project="p", location="US"),
+        total_rows=1,
+        bytes_processed=bytes_processed,
+        session_id=session_id,
+        agent_context=agent_context,
+    )
+
+
+def test_create_writes_session_manifest_for_session_job(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    _create_with_session(store, session_id="agent-42")
+
+    manifest_path = store.manifest_path_for("agent-42")
+    assert manifest_path.is_file()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["session_id"] == "agent-42"
+    assert manifest["count"] == 1
+    assert manifest["bytes_processed"] == 2048
+
+
+def test_create_does_not_write_manifest_for_session_less_job(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    _create_with_session(store, session_id=None)
+
+    assert not store.sessions_dir().exists() or not any(store.sessions_dir().iterdir())
+
+
+def _store_with_clock(tmp_path: Path) -> Any:
+    """A store with iter-based now/nonce so multiple jobs get distinct ids."""
+    _, store_module = _jobs_modules()
+    times: list[datetime] = []
+    nonces: list[str] = []
+
+    def now() -> datetime:
+        if not times:
+            now.current = datetime(2026, 5, 12, 10, 0, tzinfo=UTC)
+        else:
+            now.current = datetime(2026, 5, 12, 10 + len(times), 0, tzinfo=UTC)
+        times.append(now.current)
+        return now.current
+
+    counter = {"i": 0}
+
+    def nonce() -> str:
+        counter["i"] += 1
+        return f"n{counter['i']:03d}"
+
+    return store_module.JobStore(root=tmp_path / "jobs", now=now, nonce=nonce)
+
+
+def test_create_appends_to_existing_manifest(tmp_path: Path) -> None:
+    store = _store_with_clock(tmp_path)
+
+    first = _create_with_session(store, session_id="agent-42", bytes_processed=500)
+    second = _create_with_session(store, session_id="agent-42", bytes_processed=1500)
+
+    manifest = json.loads(store.manifest_path_for("agent-42").read_text(encoding="utf-8"))
+    assert manifest["jobs"] == [first.qmb_job_id, second.qmb_job_id]
+    assert manifest["count"] == 2
+    assert manifest["bytes_processed"] == 2000
+    assert manifest["first"] is not None
+    assert manifest["latest"] is not None
+
+
+def test_create_uses_agent_context_session_id_when_top_level_is_none(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = AgentContext(name="pi", session_id="agent-legacy")
+
+    _create_with_session(store, session_id=None, agent_context=agent)
+
+    manifest = json.loads(store.manifest_path_for("agent-legacy").read_text(encoding="utf-8"))
+    assert manifest["session_id"] == "agent-legacy"
+    assert manifest["agents"] == ["pi"]
+
+
+def test_list_session_job_ids_reads_manifest(tmp_path: Path) -> None:
+    store = _store_with_clock(tmp_path)
+    first = _create_with_session(store, session_id="agent-42")
+    second = _create_with_session(store, session_id="agent-42")
+
+    ids = store.list_session_job_ids("agent-42")
+
+    assert ids == [first.qmb_job_id, second.qmb_job_id]
+
+
+def test_list_session_job_ids_falls_back_to_full_scan_when_manifest_missing(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    record = _create_with_session(store, session_id="agent-42")
+    # Simulate an old archive by deleting the manifest after creation.
+    store.manifest_path_for("agent-42").unlink()
+
+    ids = store.list_session_job_ids("agent-42")
+
+    assert ids == [record.qmb_job_id]
+    # Fallback rebuilds and persists the manifest.
+    assert store.manifest_path_for("agent-42").is_file()
+
+
+def test_list_session_job_ids_returns_empty_for_unknown_session(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _create_with_session(store, session_id="agent-42")
+
+    assert store.list_session_job_ids("nonexistent") == []
+
+
+def test_session_manifests_lists_all_manifests(tmp_path: Path) -> None:
+    store = _store_with_clock(tmp_path)
+    _create_with_session(store, session_id="agent-1")
+    _create_with_session(store, session_id="agent-2")
+
+    manifests = store.session_manifests()
+    session_ids = sorted(m.session_id for m in manifests)
+    assert session_ids == ["agent-1", "agent-2"]
+
+
+def test_session_manifests_falls_back_to_full_scan_without_sessions_dir(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _create_with_session(store, session_id="agent-42")
+    # Wipe the sessions dir to simulate a pre-manifest archive.
+    import shutil
+
+    shutil.rmtree(store.sessions_dir())
+
+    manifests = store.session_manifests()
+    assert len(manifests) == 1
+    assert manifests[0].session_id == "agent-42"
+    assert manifests[0].count == 1
+
+
+def test_reindex_rebuilds_all_manifests_from_full_scan(tmp_path: Path) -> None:
+    store = _store_with_clock(tmp_path)
+    _create_with_session(store, session_id="agent-1")
+    _create_with_session(store, session_id="agent-2")
+    # Wipe manifests.
+    import shutil
+
+    shutil.rmtree(store.sessions_dir())
+
+    count = store.reindex()
+
+    assert count == 2
+    assert store.manifest_path_for("agent-1").is_file()
+    assert store.manifest_path_for("agent-2").is_file()
+
+
+def test_list_ignores_sessions_directory(tmp_path: Path) -> None:
+    """``store.list()`` must not treat the sessions/ dir as a job."""
+    store = _store(tmp_path)
+    record = _create_with_session(store, session_id="agent-42")
+
+    jobs = store.list()
+    assert [r.qmb_job_id for r in jobs] == [record.qmb_job_id]
