@@ -1,6 +1,6 @@
 [project]
 name = "qmb"
-version = "0.5.1"
+version = "0.6.0"
 description = "Query Me Big – a BigQuery CLI with Textual TUI, dbt support, and export"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,6 +13,7 @@ dependencies = [
     "textual>=3.0",
     "rich>=13.0",
     "google-cloud-bigquery>=3.25",
+    "google-cloud-storage>=2.18",
     "pyarrow>=17.0",
     "pyperclip>=1.9",
 ]

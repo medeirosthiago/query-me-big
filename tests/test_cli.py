@@ -108,13 +108,38 @@ def test_default_run_group_routes_history_command(monkeypatch) -> None:
         "qmb.bigquery.client.get_client", lambda project, location: None
     )
     monkeypatch.setattr(
-        "qmb.bigquery.history.list_recent_queries", lambda client, days, limit: []
+        "qmb.bigquery.history.list_recent_queries",
+        lambda client, days, limit, user_email=None: [],
     )
 
     result = CliRunner().invoke(cli.app, ["history", "--project", "proj"])
 
     assert result.exit_code == 0, result.output
     assert _json.loads(result.output.strip()) == []
+
+
+def test_history_user_flag_threads_to_list_recent_queries(monkeypatch) -> None:
+    """`qmb history --user foo@bar.com` forwards user_email to list_recent_queries."""
+    captured: dict = {}
+
+    def fake_list(client, *, days, limit, user_email=None):
+        captured["user_email"] = user_email
+        captured["days"] = days
+        captured["limit"] = limit
+        return []
+
+    monkeypatch.setattr(
+        "qmb.bigquery.client.get_client", lambda project, location: None
+    )
+    monkeypatch.setattr("qmb.bigquery.history.list_recent_queries", fake_list)
+
+    result = CliRunner().invoke(
+        cli.app, ["history", "--user", "you@example.com", "-d", "1"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["user_email"] == "you@example.com"
+    assert captured["days"] == 1
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -183,7 +208,8 @@ def test_history_json_payload_contains_entry_fields(monkeypatch) -> None:
         "qmb.bigquery.client.get_client", lambda project, location: None
     )
     monkeypatch.setattr(
-        "qmb.bigquery.history.list_recent_queries", lambda client, days, limit: entries
+        "qmb.bigquery.history.list_recent_queries",
+        lambda client, days, limit, user_email=None: entries,
     )
 
     result = CliRunner().invoke(cli.app, ["history"])
@@ -199,6 +225,7 @@ def test_history_json_payload_contains_entry_fields(monkeypatch) -> None:
             "query": "SELECT 1",
             "bytes_processed": 2048,
             "state": "DONE",
+            "user_email": "",
         }
     ]
 
@@ -215,7 +242,7 @@ def test_history_tui_flag_opens_the_picker(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "qmb.bigquery.history.list_recent_queries",
-        lambda client, days, limit: [
+        lambda client, days, limit, user_email=None: [
             QueryHistoryEntry(
                 job_id="j",
                 project="p",
@@ -461,6 +488,15 @@ def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:
             assert ref == "proj.analytics"
             return FakeDataset()
 
+        def list_tables(self, ref):
+            assert ref == "proj.analytics"
+            from types import SimpleNamespace
+            return [
+                SimpleNamespace(table_id="orders"),
+                SimpleNamespace(table_id="events"),
+                SimpleNamespace(table_id="users"),
+            ]
+
     monkeypatch.setattr("qmb.bigquery.client.get_client", lambda *a, **kw: FakeClient())
 
     result = CliRunner().invoke(cli.app, ["describe", "analytics"])
@@ -470,6 +506,7 @@ def test_describe_dataset_prints_api_repr_as_json(monkeypatch) -> None:
     assert payload["kind"] == "dataset"
     assert payload["dataset"]["location"] == "US"
     assert payload["dataset"]["description"] == "Production analytics"
+    assert payload["tables"] == ["events", "orders", "users"]
 
 
 def test_describe_table_prints_api_repr_as_json(monkeypatch) -> None:
