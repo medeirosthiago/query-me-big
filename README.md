@@ -119,6 +119,7 @@ qmb browse -t
 | `qmb jobs open JOB_ID` | Open an archived qmb job's row preview in the TUI. |
 | `qmb jobs export [JOB_ID]` | Publish one job or a session of jobs to remote archive storage. |
 | `qmb jobs import [JOB_ID]` | Import one job or a session of jobs from remote archive storage. |
+| `qmb jobs reindex` | Rebuild local session manifests from a full job scan. |
 | `qmb --version` / `-V` | Print the installed qmb version. |
 | `qmb --help` | Top-level command list. Every subcommand also accepts `--help`. |
 
@@ -219,7 +220,7 @@ interactive picker.
 
 ### `qmb jobs list`
 
-List local qmb job archives, newest first. By default this shows the last 10
+List local qmb job archives, newest first. By default this shows the last 50
 matching jobs; use `--all` or `--limit N` to change that. Text output includes
 an inline `session:<id>` column when session metadata is present. JSON output is
 suitable for agent workflows and includes `effective_session_id` as a fallback
@@ -230,7 +231,7 @@ for older archives that only stored the session inside `agent.session_id`.
 | `--format text\|json` | | Output format (default `text`). |
 | `--session-id ID` / `--session ID` | | Filter to jobs tagged with this session id. |
 | `--parent-job-id ID` | | Filter to jobs that descend from this parent qmb job id. |
-| `--limit N` | `-l` | Number of records returned (default `10`). |
+| `--limit N` | `-l` | Number of records returned (default `50`). |
 | `--all` | | Return all matching jobs instead of the default newest 10. |
 | `--agent TEXT` | | Filter by agent/tool name (case-insensitive contains). |
 | `--date YYYY-MM-DD` | | Filter to jobs created on this UTC date. |
@@ -299,15 +300,22 @@ query. Provide either `JOB_ID` or `--session-id`.
 
 Example destination: `gs://data-platform-moises-temp/qmb/`.
 
-Remote layout:
+Remote layout (flat — mirrors the local archive shape exactly):
 
 ```text
-gs://data-platform-moises-temp/qmb/sessions/<session_id>/<qmb_job_id>/
+gs://data-platform-moises-temp/qmb/<qmb_job_id>/
   metadata.json
   query.sql
   schema.json
   preview.jsonl
+gs://data-platform-moises-temp/qmb/sessions/<session_id>.json   # session manifest
 ```
+
+Job artifacts live at a flat `<qmb_job_id>/` prefix so import-by-id is O(1)
+(direct path check; partial ids fall back to a prefix list). The session
+manifest is a regenerable index from session id to job ids plus cached
+aggregates — never the source of truth. `metadata.json` inside each job
+remains authoritative for that job's `session_id`.
 
 | Flag | Description |
 |---|---|
@@ -329,6 +337,20 @@ Provide either `JOB_ID` or `--session-id`.
 | `--destination URI` | Remote archive URI. Defaults through env/config; required when no remote archive is configured. |
 | `--overwrite` | Replace an existing local job archive with the remote copy. Without this, existing jobs are skipped. |
 | `--format text\|json` | Output format (default `text`). |
+
+### `qmb jobs reindex`
+
+Rebuild every local session manifest (`~/.qmb/jobs/sessions/<session_id>.json`)
+from a full job scan. Useful after upgrading from a pre-manifest qmb version or
+after manually editing/removing job directories.
+
+Reads each job's `metadata.json`, regroups by `session_id`, and writes one
+manifest per session. Session-less jobs are skipped, matching `jobs sessions`.
+Safe to run repeatedly — manifests are idempotent over the same job set.
+
+| Flag | Description |
+|---|---|
+| `--format text\|json` | Output format (default `text`). JSON emits `{"sessions_rebuilt": N}`. |
 
 ## JSON output schemas
 
@@ -474,6 +496,15 @@ schema.json      # result schema
 preview.jsonl    # first 500 rows for fast browsing / nvim preview
 ```
 
+A session manifest is written alongside the job at
+`~/.qmb/jobs/sessions/<session_id>.json` whenever the job has a session id. It
+is a regenerable index (job ids + cached aggregates) — never the source of
+truth. `metadata.json` inside each job remains authoritative for that job's
+`session_id`. Session-level commands (`jobs sessions`, `jobs list --session-id`,
+`jobs import --session-id`) read the manifest first and fall back to a full
+scan when it is missing. Run `qmb jobs reindex` to rebuild every manifest after
+manually editing or removing job directories.
+
 Agent/session metadata can be supplied with flags or environment variables:
 
 ```bash
@@ -508,6 +539,7 @@ qmb jobs export <id>                     # publish one local job archive to GCS
 qmb jobs export --session-id agent-42    # publish a whole session
 qmb jobs import <id>                     # import one remote job archive locally
 qmb jobs import --session-id agent-42    # import a whole remote session
+qmb jobs reindex                         # rebuild local session manifests from a full scan
 ```
 
 `<id>` accepts a full job id or any unambiguous substring. Inside the TUI,
@@ -573,9 +605,69 @@ short `qmb: importing remote ...` notice to stderr so stdout remains usable for
 JSON/SQL output. Pass `--destination gs://bucket/prefix` to override env/config
 for any of these lookups.
 
-Remote archives preserve `qmb_job_id` and mirror the local artifact names under
-`sessions/<session_id>/<qmb_job_id>/`, so imported jobs work with the same local
-commands (`qmb jobs show`, `qmb jobs sql`, `qmb jobs open`).
+Remote archives preserve `qmb_job_id` and mirror the local flat layout
+(`<qmb_job_id>/` at the archive root plus `sessions/<session_id>.json`
+manifests), so imported jobs work with the same local commands (`qmb jobs show`,
+`qmb jobs sql`, `qmb jobs open`).
+
+## Environment variables
+
+All optional — qmb works with zero configuration. Set the ones you need.
+
+### Agent / session metadata
+
+Tag runs with agent context for later filtering (`qmb jobs list --session-id`,
+`qmb jobs sessions`). Explicit CLI flags always override these.
+
+| Variable | Purpose |
+|---|---|
+| `QMB_SESSION_ID` | Default `--session-id` for every run in this shell. |
+| `QMB_AGENT_NAME` | Default `--agent` (e.g. `pi`, `codex`). |
+| `QMB_AGENT_CONVERSATION_ID` | Conversation id for archive metadata. |
+| `QMB_AGENT_RUN_ID` | Agent run id for archive metadata. |
+| `QMB_AGENT_TURN_ID` | Agent turn id for archive metadata. |
+| `QMB_AGENT_TASK` | Human-readable task label for archive metadata. |
+| `QMB_AGENT_TAGS` | Comma-separated tags (merged with repeatable `--tag`). |
+| `QMB_AGENT_META_JSON` | JSON object of arbitrary metadata (merged with `--meta key=value`). |
+
+A typical agent session exports once and tags every run automatically:
+
+```bash
+export QMB_SESSION_ID=pi-2026-05-13-orders-debug
+export QMB_AGENT_NAME=pi
+export QMB_AGENT_TASK="debug orders discrepancy"
+qmb "SELECT 1"
+```
+
+### Remote archive
+
+Mirror local job archives to GCS for sharing or cross-machine recovery.
+
+| Variable | Purpose |
+|---|---|
+| `QMB_REMOTE_ARCHIVE_URI` | Remote archive destination (e.g. `gs://data-platform-moises-temp/qmb/`). Falls back to `~/.qmb/config.toml` `[remote_archive].uri`; remote features are disabled when unset. |
+| `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS` | Preview rows published per job (default `500`). Also settable via `[remote_archive].preview_rows`. |
+
+### Local archive + caches
+
+| Variable | Purpose |
+|---|---|
+| `QMB_JOBS_DIR` | Override the local job archive root (default `~/.qmb/jobs`). |
+| `QMB_REGIONS_CACHE_DIR` | Override the regions cache root (default `~/.qmb/cache/regions`). |
+
+### dbt auto-detection
+
+| Variable | Purpose |
+|---|---|
+| `DBT_PROJECT_DIR` | Auto-enables `--resolve-dbt` and points at the dbt project root. |
+| `DBT_MODEL_PATH` | Auto-enables `--resolve-dbt` for a specific model path. |
+
+### Debug tracing
+
+| Variable | Purpose |
+|---|---|
+| `QMB_TRACE_CATALOG=1` | Print per-dataset wall-clock timing for `qmb browse` to stderr. |
+| `QMB_TRACE_INFO_SCHEMA=1` | Print per-region wall-clock timing for the INFORMATION_SCHEMA path. |
 
 ## `--format` and renderers
 
@@ -627,7 +719,8 @@ Layered, CLI-first. The TUI is one renderer among several.
   `executor.py`, `pager.py`, `exporters.py`, `history.py`, `catalog.py`,
   `catalog_search.py`, `catalog_format.py`.
 - `src/qmb/jobs/` — local query archive: `store.py`, `models.py`,
-  `artifacts.py`, `result_source.py`.
+  `artifacts.py`, `result_source.py`, `session_manifest.py` (session-id → job-id
+  index), `remote.py` (GCS remote archive backend).
 - `src/qmb/tui/` — Textual app with vim-style keybindings, inline bottom
   pickers, browser pane, history/jobs pickers, and nvim integration.
 - `src/qmb/integrations/` — editor (nvim) and clipboard helpers.
