@@ -34,4 +34,5 @@ class ExecutionOutcome:
     exported_rows: int | None = None
     archived_job: "JobRecord | None" = None
     archive_error: str | None = None
+    remote_archive: dict[str, Any] | None = None
     dry_run: bool = False

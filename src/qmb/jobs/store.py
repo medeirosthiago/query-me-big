@@ -1,5 +1,7 @@
 """Filesystem-backed local qmb job archive store."""
 
+from __future__ import annotations
+
 import json
 import os
 import secrets
@@ -10,6 +12,13 @@ from typing import Any
 
 from qmb.jobs.artifacts import write_jsonl_rows
 from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
+from qmb.jobs.session_manifest import (
+    SessionManifest,
+    effective_session_id,
+    recompute_from_jobs,
+    safe_path_segment,
+    update_manifest_with_job,
+)
 from qmb.types import AgentContext, SchemaField
 
 
@@ -104,6 +113,7 @@ class JobStore:
             json.dumps(record.to_metadata(), indent=2),
             encoding="utf-8",
         )
+        self._update_session_manifest(record)
         return record
 
     def read(self, job_id: str) -> JobRecord:
@@ -190,6 +200,111 @@ class JobStore:
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as e:
             raise CorruptJobError(f"Corrupt job archive: {qmb_job_id}") from e
+
+    # -- Session manifests -------------------------------------------------
+
+    def sessions_dir(self) -> Path:
+        """Return the directory holding session manifest files."""
+        return self.root / "sessions"
+
+    def manifest_path_for(self, session_id: str) -> Path:
+        """Return the on-disk path for one session's manifest file."""
+        return self.sessions_dir() / f"{safe_path_segment(session_id)}.json"
+
+    def list_session_job_ids(self, session_id: str) -> list[str]:
+        """Return the job ids for a session, preferring the manifest.
+
+        Falls back to a full scan + manifest rebuild if the manifest is
+        missing or unreadable, so this works on older archives that
+        predate manifests.
+        """
+        manifest = self._read_manifest(session_id)
+        if manifest is None:
+            records = [
+                record
+                for record in self.list()
+                if effective_session_id(record) == session_id
+            ]
+            if not records:
+                return []
+            manifest = recompute_from_jobs(session_id, records)
+            self._write_manifest(manifest)
+        return list(manifest.jobs)
+
+    def session_manifests(self) -> list[SessionManifest]:
+        """Return all session manifests, rebuilding from a full scan if needed.
+
+        If the ``sessions/`` directory does not exist or is empty, this falls
+        back to scanning every job and rebuilding manifests from scratch
+        (without persisting them — use :meth:`reindex` to persist).
+        """
+        sessions_dir = self.sessions_dir()
+        if sessions_dir.is_dir():
+            manifests: list[SessionManifest] = []
+            for child in sessions_dir.iterdir():
+                if not child.is_file() or child.suffix != ".json":
+                    continue
+                try:
+                    manifests.append(SessionManifest.from_json(child.read_text(encoding="utf-8")))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+            if manifests:
+                return manifests
+        # Fallback: rebuild from a full scan without persisting.
+        groups: dict[str, list[JobRecord]] = {}
+        for record in self.list():
+            sid = effective_session_id(record)
+            if sid:
+                groups.setdefault(sid, []).append(record)
+        return [recompute_from_jobs(sid, records) for sid, records in groups.items()]
+
+    def reindex(self) -> int:
+        """Rebuild every session manifest from a full scan; return the count."""
+        groups: dict[str, list[JobRecord]] = {}
+        for record in self.list():
+            sid = effective_session_id(record)
+            if sid:
+                groups.setdefault(sid, []).append(record)
+        sessions_dir = self.sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        for sid, records in groups.items():
+            self._write_manifest(recompute_from_jobs(sid, records))
+        return len(groups)
+
+    def _update_session_manifest(self, record: JobRecord) -> None:
+        """Fold ``record`` into its session manifest, atomically.
+
+        No-op for session-less jobs — they're never grouped, matching the
+        existing ``jobs sessions`` behavior of skipping them.
+        """
+        session_id = effective_session_id(record)
+        if session_id is None:
+            return
+        existing = self._read_manifest(session_id)
+        try:
+            updated = update_manifest_with_job(existing, record)
+        except ValueError:
+            # Should not happen given the session_id check above, but stay
+            # defensive: a manifest failure must never break job creation.
+            return
+        self._write_manifest(updated)
+
+    def _read_manifest(self, session_id: str) -> SessionManifest | None:
+        path = self.manifest_path_for(session_id)
+        if not path.is_file():
+            return None
+        try:
+            return SessionManifest.from_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _write_manifest(self, manifest: SessionManifest) -> None:
+        sessions_dir = self.sessions_dir()
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        path = self.manifest_path_for(manifest.session_id)
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(manifest.to_json(), encoding="utf-8")
+        os.replace(tmp_path, path)
 
 
 def default_jobs_dir() -> Path:
