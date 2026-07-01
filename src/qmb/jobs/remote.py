@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -11,9 +10,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from qmb.jobs.session_manifest import safe_path_segment  # re-exported below
 from qmb.jobs.store import CorruptJobError, JobStore
 
 REMOTE_ARTIFACT_NAMES = ("metadata.json", "query.sql", "schema.json", "preview.jsonl")
+
+__all__ = [
+    "GcsRemoteArchive",
+    "RemoteArchiveError",
+    "RemoteArchiveResult",
+    "get_remote_archive",
+    "safe_path_segment",
+]
 
 
 class RemoteArchiveError(Exception):
@@ -43,14 +51,6 @@ def get_remote_archive(destination: str, *, client: Any | None = None) -> GcsRem
     if destination.startswith("gs://"):
         return GcsRemoteArchive(destination, client=client)
     raise RemoteArchiveError(f"Unsupported remote archive destination: {destination}")
-
-
-def safe_path_segment(value: str | None) -> str:
-    """Return a GCS-safe path segment for a session id."""
-    if not value:
-        return "unknown"
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
-    return safe.strip("._-") or "unknown"
 
 
 class GcsRemoteArchive:

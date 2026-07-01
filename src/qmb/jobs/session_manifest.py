@@ -15,6 +15,7 @@ is staleness, never data loss.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -22,6 +23,14 @@ from typing import Any
 from qmb.jobs.models import JobRecord
 
 MANIFEST_VERSION = 1
+
+
+def safe_path_segment(value: str | None) -> str:
+    """Return a filesystem/object-safe path segment for a session id."""
+    if not value:
+        return "unknown"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return safe.strip("._-") or "unknown"
 
 
 @dataclass(frozen=True)
