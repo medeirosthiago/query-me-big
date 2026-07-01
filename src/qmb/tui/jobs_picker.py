@@ -99,11 +99,9 @@ class JobsController:
 
     def _session_id(self, record: JobRecord) -> str | None:
         """Return the archived session id, including legacy agent-only records."""
-        if record.session_id:
-            return record.session_id
-        if record.agent_context is not None:
-            return record.agent_context.session_id
-        return None
+        from qmb.jobs.session_manifest import effective_session_id
+
+        return effective_session_id(record)
 
     def _sql_excerpt(self, record: JobRecord, max_chars: int = 500) -> str:
         """Return a whitespace-collapsed SQL excerpt for display/filter.

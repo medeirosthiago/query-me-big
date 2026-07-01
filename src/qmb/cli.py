@@ -854,12 +854,14 @@ def _job_record_to_list_metadata(record: Any) -> dict[str, Any]:
 
 
 def _record_session_id(record: Any) -> str | None:
-    """Return the archived session id, including legacy agent-only records."""
-    if record.session_id:
-        return record.session_id
-    if record.agent_context is not None:
-        return record.agent_context.session_id
-    return None
+    """Return the archived session id, including legacy agent-only records.
+
+    Thin wrapper over :func:`qmb.jobs.session_manifest.effective_session_id`
+    kept for callers that import it from cli.py.
+    """
+    from qmb.jobs.session_manifest import effective_session_id
+
+    return effective_session_id(record)
 
 
 def _record_agent_name(record: Any) -> str | None:
@@ -943,7 +945,7 @@ def jobs_sessions(
     """List local qmb agent/session ids summarized from archived jobs."""
     from qmb.jobs.store import JobStore
 
-    summaries = _session_summaries(JobStore().list())
+    summaries = _session_summaries(JobStore())
     if limit is not None and limit >= 0:
         summaries = summaries[:limit]
 
@@ -970,55 +972,31 @@ def jobs_sessions(
         )
 
 
-def _session_summaries(records: list[Any]) -> list[dict[str, Any]]:
-    groups: dict[str, dict[str, Any]] = {}
-    for record in records:
-        session_id = record.session_id
-        if session_id is None and record.agent_context is not None:
-            session_id = record.agent_context.session_id
-        if not session_id:
-            continue
+def _session_summaries(store: Any) -> list[dict[str, Any]]:
+    """Build session summaries from manifests, falling back to a full scan.
 
-        group = groups.setdefault(
-            session_id,
-            {
-                "session_id": session_id,
-                "count": 0,
-                "bytes_processed": 0,
-                "first": record.created_at,
-                "latest": record.created_at,
-                "agents": set(),
-                "tasks": set(),
-                "cwds": set(),
-            },
-        )
-        group["count"] += 1
-        group["bytes_processed"] += int(getattr(record, "bytes_processed", 0) or 0)
-        group["first"] = min(group["first"], record.created_at)
-        group["latest"] = max(group["latest"], record.created_at)
-        if record.agent_context is not None:
-            if record.agent_context.name:
-                group["agents"].add(record.agent_context.name)
-            if record.agent_context.task:
-                group["tasks"].add(record.agent_context.task)
-            if record.agent_context.cwd:
-                group["cwds"].add(record.agent_context.cwd)
-
-    summaries = [
-        {
-            "session_id": group["session_id"],
-            "count": group["count"],
-            "bytes_processed": group["bytes_processed"],
-            "first": group["first"].isoformat(),
-            "latest": group["latest"].isoformat(),
-            "agents": sorted(group["agents"]),
-            "tasks": sorted(group["tasks"]),
-            "cwds": sorted(group["cwds"]),
-        }
-        for group in groups.values()
-    ]
-    summaries.sort(key=lambda summary: summary["latest"], reverse=True)
+    Manifests are the fast path (one file read per session). The fallback
+    inside ``store.session_manifests()`` rebuilds from a full job scan when
+    the ``sessions/`` directory is missing or empty, so this works on older
+    archives that predate manifests.
+    """
+    summaries = [_manifest_to_summary(manifest) for manifest in store.session_manifests()]
+    summaries.sort(key=lambda summary: summary["latest"] or "", reverse=True)
     return summaries
+
+
+def _manifest_to_summary(manifest: Any) -> dict[str, Any]:
+    """Convert a SessionManifest to the legacy jobs-sessions JSON shape."""
+    return {
+        "session_id": manifest.session_id,
+        "count": manifest.count,
+        "bytes_processed": manifest.bytes_processed,
+        "first": manifest.first,
+        "latest": manifest.latest,
+        "agents": list(manifest.agents),
+        "tasks": list(manifest.tasks),
+        "cwds": list(manifest.cwds),
+    }
 
 
 @jobs_app.command("show")
@@ -1283,9 +1261,10 @@ def jobs_import(
 
 
 def _records_for_session(store: Any, session_id: str | None) -> list[Any]:
-    records = [record for record in store.list() if _record_session_id(record) == session_id]
-    if not records:
+    job_ids = store.list_session_job_ids(session_id) if session_id else []
+    if not job_ids:
         raise typer.BadParameter(f"No local qmb jobs found for session: {session_id}")
+    records = [store.read(job_id) for job_id in job_ids]
     records.sort(key=lambda record: record.created_at)
     return records
 
