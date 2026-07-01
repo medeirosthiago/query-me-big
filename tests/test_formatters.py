@@ -78,6 +78,7 @@ def _outcome(
     trace: ResolutionTrace | None = None,
     exported_path=None,
     exported_rows=None,
+    remote_archive=None,
 ) -> ExecutionOutcome:
     return ExecutionOutcome(
         resolved=ResolvedQuery(sql="select * from t", source_label="ad-hoc"),
@@ -88,6 +89,7 @@ def _outcome(
         archived_job=archived_job,
         exported_path=exported_path,
         exported_rows=exported_rows,
+        remote_archive=remote_archive,
     )
 
 
@@ -162,6 +164,7 @@ def test_json_formatter_emits_full_payload_with_rows() -> None:
         "error": None,
     }
     assert payload["export"] is None
+    assert payload["remote_archive"] is None
 
 
 def test_json_formatter_includes_archive_and_export_when_present(tmp_path) -> None:
@@ -200,6 +203,35 @@ def test_json_formatter_includes_archive_and_export_when_present(tmp_path) -> No
         "error": None,
     }
     assert payload["export"] == {"path": str(tmp_path / "out.csv"), "rows": 2}
+    assert payload["remote_archive"] is None
+
+
+def test_json_formatter_includes_remote_archive_status() -> None:
+    client = FakeBigQueryClient(_rows(), _schema())
+    outcome = _outcome(
+        client=client,
+        total_rows=2,
+        remote_archive={
+            "status": "exported",
+            "destination": "gs://bucket/qmb/",
+            "jobs": [
+                {
+                    "qmb_job_id": "qmb_2026-01-01_12-00-00_abc123",
+                    "status": "exported",
+                    "uri": "gs://bucket/qmb/qmb_2026-01-01_12-00-00_abc123/",
+                    "error": None,
+                }
+            ],
+            "error": None,
+        },
+    )
+
+    buf = io.StringIO()
+    JsonFormatter(stream=buf).render_run(outcome, _request())
+
+    payload = json.loads(buf.getvalue())
+    assert payload["remote_archive"]["status"] == "exported"
+    assert payload["remote_archive"]["destination"] == "gs://bucket/qmb/"
 
 
 def test_json_formatter_dry_run_shape() -> None:

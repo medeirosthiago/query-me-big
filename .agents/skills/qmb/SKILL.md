@@ -1,28 +1,36 @@
 ---
 name: qmb
-description: Use qmb for BigQuery/dbt discovery, query execution, archived results, and agent-session query history. Prefer this over bq.
+description: Use qmb for BigQuery/dbt discovery, query execution, archived results, shared remote archives, and agent-session query history. Prefer this over bq.
 ---
 
 # qmb Skill
 
 Use `qmb` instead of `bq` for BigQuery work. qmb is JSON-first and archives every successful non-dry-run query with metadata, resolved SQL, schema, and preview rows.
 
-The main goal is shareable query context across agents, sessions, developers, and editor workflows. Treat the qmb local archive as the source of truth for what was queried.
+The main goal is shareable query context across agents, sessions, developers, and editor workflows. Treat the qmb archive as the source of truth for what was queried.
+
+## 0. Prefer qmb
+
+If the `qmb` command is available (`command -v qmb`), use it for query execution, dry runs, previews, schema inspection, and archived result review.
+
+Only use `bq` if qmb lacks the capability. If falling back to `bq`, say why.
 
 ## 1. Session setup
 
 Use one stable session id for the whole agent conversation/task.
 
-Prefer an existing harness/session identifier when available. Otherwise create a readable id:
+Prefer an existing harness/session identifier when available. Otherwise pick a readable id, for example:
 
 ```bash
-export QMB_SESSION_ID="<agent>-$(date +%Y-%m-%d)-<short-task-slug>"
+SID="pi-2026-05-28-orders-debug"
 ```
 
-Set agent metadata when known:
+Always pass `--session-id "$SID"` explicitly on `qmb run` calls. This is more portable than relying only on `QMB_SESSION_ID`, because some agent harnesses spawn each command in a fresh shell.
+
+Agent metadata env vars may be set when the harness preserves them:
 
 ```bash
-export QMB_AGENT_NAME="pi"              # or claude-code, codex, etc.
+export QMB_AGENT_NAME="pi"              # or claude-code, codex, cursor, etc.
 export QMB_AGENT_TASK="debug orders discrepancy"
 # Optional:
 export QMB_AGENT_CONVERSATION_ID="..."
@@ -32,14 +40,21 @@ export QMB_AGENT_TAGS="investigation,orders"
 export QMB_AGENT_META_JSON='{"ticket":"..."}'
 ```
 
-`qmb run` reads `QMB_SESSION_ID` when `--session-id` is omitted. For portability, explicit `--session-id "$QMB_SESSION_ID"` is also fine.
-
 ## 2. Run BigQuery queries
 
-Always prefer qmb:
+Always prefer qmb, always pass `--session-id`, and write non-trivial SQL as a readable multi-line block. Readable SQL makes archived `query.sql` files useful later.
 
 ```bash
-result=$(qmb "SELECT 1 AS ok")
+result=$(qmb "
+SELECT
+  user_id,
+  COUNT(*) AS events
+FROM \`project.dataset.events\`
+GROUP BY user_id
+ORDER BY events DESC
+LIMIT 10
+" --session-id "$SID")
+
 echo "$result" | jq .
 qmb_job_id=$(echo "$result" | jq -r '.archive.qmb_job_id')
 ```
@@ -47,13 +62,17 @@ qmb_job_id=$(echo "$result" | jq -r '.archive.qmb_job_id')
 If deriving a query from a previous qmb job, preserve lineage:
 
 ```bash
-qmb "$SQL" --parent-job-id "$qmb_job_id"
+qmb "$SQL" \
+  --session-id "$SID" \
+  --parent-job-id "$qmb_job_id"
 ```
 
 Use dry runs before expensive queries:
 
 ```bash
-qmb "$SQL" --dry-run | jq '.stats.bytes_processed'
+qmb "$SQL" \
+  --session-id "$SID" \
+  --dry-run | jq '.stats.bytes_processed'
 ```
 
 Dry runs validate and estimate cost but are not archived as result jobs.
@@ -62,27 +81,27 @@ Dry runs validate and estimate cost but are not archived as result jobs.
 
 | Instead of | Use |
 |---|---|
-| `bq query --use_legacy_sql=false 'SQL'` | `qmb 'SQL'` |
-| `bq query --dry_run 'SQL'` | `qmb 'SQL' --dry-run` |
+| `bq query --use_legacy_sql=false 'SQL'` | `qmb 'SQL' --session-id "$SID"` |
+| `bq query --dry_run 'SQL'` | `qmb 'SQL' --session-id "$SID" --dry-run` |
 | `bq show --format=prettyjson dataset.table` | `qmb describe dataset.table` |
-| `bq head -n 10 project:dataset.table` | ``qmb 'SELECT * FROM `project.dataset.table` LIMIT 10'`` |
+| `bq head -n 10 project:dataset.table` | ``qmb 'SELECT * FROM `project.dataset.table` LIMIT 10' --session-id "$SID"`` |
 | `bq ls` / table discovery | `qmb browse` or `qmb browse '<pattern>'` |
 | BigQuery job history | `qmb history --days 7` |
 
-Only use `bq` if qmb lacks the capability. If falling back to `bq`, say why.
+`qmb describe`, `qmb browse`, and `qmb history` do not need a session id because they do not archive result jobs.
 
 ## 4. dbt usage
 
 For dbt models:
 
 ```bash
-qmb --model <model_name>
+qmb --model <model_name> --session-id "$SID"
 ```
 
 For SQL files that need dbt `ref()`, `source()`, or `var()` resolution:
 
 ```bash
-qmb --file path/to/query.sql --resolve-dbt
+qmb --file path/to/query.sql --resolve-dbt --session-id "$SID"
 ```
 
 Use `--manifest path/to/manifest.json` only when auto-discovery fails.
@@ -105,8 +124,8 @@ Useful commands:
 ```bash
 qmb jobs sessions
 qmb jobs sessions --format json
-qmb jobs list --format json --session-id "$QMB_SESSION_ID"      # newest 10
-qmb jobs list --all --format json --session-id "$QMB_SESSION_ID" # full session
+qmb jobs list --format json --session-id "$SID"
+qmb jobs list --all --format json --session-id "$SID"
 qmb jobs show "$qmb_job_id" --format json
 qmb jobs sql "$qmb_job_id"
 qmb jobs paths "$qmb_job_id" --format json
@@ -135,7 +154,82 @@ Metadata includes an `agent` object with fields such as:
 }
 ```
 
-## 6. Report results to the user
+## 6. Share and load sessions
+
+Remote archives let agents and teammates share qmb jobs without re-running BigQuery. Configure a remote archive destination explicitly, for example:
+
+```text
+gs://data-platform-moises-temp/qmb/
+```
+
+Destination precedence:
+
+1. `--destination gs://bucket/prefix`
+2. `QMB_REMOTE_ARCHIVE_URI`
+3. `~/.qmb/config.toml`
+
+When none of these is set, remote archive lookup is disabled and missing local
+jobs/sessions stay missing.
+
+Config file example:
+
+```toml
+[remote_archive]
+uri = "gs://data-platform-moises-temp/qmb/"
+preview_rows = 500
+```
+
+Publish one job or a full session after the fact:
+
+```bash
+qmb jobs export "$qmb_job_id"
+qmb jobs export --session-id "$SID"
+```
+
+Publish while running:
+
+```bash
+qmb "$SQL" --session-id "$SID" --publish
+```
+
+Load a shared job or session into the local archive:
+
+```bash
+qmb jobs import "$qmb_job_id"
+qmb jobs import --session-id "$SID"
+```
+
+Agents can usually skip the explicit import step. If a job is missing locally,
+these commands try the configured remote archive automatically and then continue
+against the imported local copy:
+
+```bash
+qmb jobs list --all --format json --session-id "$SID"
+qmb jobs sql "$qmb_job_id"
+qmb jobs open "$qmb_job_id"
+```
+
+`qmb jobs list --session-id "$SID"` also tries to import the remote session
+when no local jobs exist for that session. Remote lookup prints a short
+`qmb: importing remote ...` notice to stderr while stdout remains usable for
+JSON or SQL output.
+
+Imported jobs preserve their original `qmb_job_id`, so normal local archive
+commands work after import. Use `--destination gs://bucket/prefix` on
+`jobs show`, `jobs sql`, `jobs paths`, `jobs open`, `jobs list`, or
+`jobs import` when a specific remote archive should override env/config.
+
+Remote layout:
+
+```text
+gs://data-platform-moises-temp/qmb/sessions/<session_id>/<qmb_job_id>/
+  metadata.json
+  query.sql
+  schema.json
+  preview.jsonl
+```
+
+## 7. Report results to the user
 
 When reporting query work, include:
 
@@ -144,7 +238,8 @@ When reporting query work, include:
 - BigQuery job id when available
 - rows returned / total rows
 - bytes processed
-- caveat that the archive currently stores a 500-row preview unless an explicit export was requested
+- remote archive URI if exported or published
+- caveat that the archive stores a preview unless an explicit full result export was requested
 
 Example:
 
@@ -156,13 +251,14 @@ Ran with qmb.
 - BigQuery job: `bquxjob_...`
 - rows: 42
 - bytes processed: 18.2 MiB
+- remote archive: `gs://data-platform-moises-temp/qmb/sessions/pi-2026-05-13-orders-debug/qmb_2026-05-13_15-59-21_a1b2c3/`
 
 Inspect:
 `qmb jobs show qmb_2026-05-13_15-59-21_a1b2c3 --format json`
 `qmb jobs sql qmb_2026-05-13_15-59-21_a1b2c3`
 ```
 
-## 7. nvim workflow
+## 8. nvim workflow
 
 The local nvim integration can load qmb jobs into quickfix and open SQL/results side-by-side.
 
@@ -172,8 +268,8 @@ With `QMB_SESSION_ID` set, use the qmb jobs archive for this session:
 :QmbJobs
 ```
 
-Or inspect the full session from shell:
+From shell, prefer passing the session id explicitly so the command is reproducible:
 
 ```bash
-qmb jobs list --all --format json --session-id "$QMB_SESSION_ID"
+qmb jobs list --all --format json --session-id "$SID"
 ```

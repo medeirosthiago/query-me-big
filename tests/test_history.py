@@ -16,6 +16,7 @@ def _make_job(
     created: datetime | None = None,
     total_bytes_processed: int = 1024,
     state: str = "DONE",
+    user_email: str = "me@example.com",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         job_type=job_type,
@@ -28,11 +29,20 @@ def _make_job(
         created=created or datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC),
         total_bytes_processed=total_bytes_processed,
         state=state,
+        user_email=user_email,
     )
 
 
-def _make_client(jobs: list[SimpleNamespace]) -> SimpleNamespace:
-    return SimpleNamespace(list_jobs=lambda **_kwargs: jobs)
+def _make_client(jobs: list[SimpleNamespace], captured: dict | None = None) -> SimpleNamespace:
+    """Build a fake client. If ``captured`` is given, record list_jobs kwargs into it."""
+    if captured is None:
+        return SimpleNamespace(list_jobs=lambda **_kwargs: jobs)
+
+    def _list_jobs(**kwargs):
+        captured.update(kwargs)
+        return jobs
+
+    return SimpleNamespace(list_jobs=_list_jobs)
 
 
 def test_query_history_entry_preview_truncates() -> None:
@@ -129,3 +139,65 @@ def test_list_recent_queries_sorted_by_created_desc() -> None:
     entries = list_recent_queries(client)
 
     assert [e.job_id for e in entries] == ["new", "mid", "old"]
+
+
+def test_list_recent_queries_defaults_to_current_user_only() -> None:
+    """Without user_email, all_users=False (only the authenticated user's jobs)."""
+    jobs = [_make_job(job_id="j1")]
+    captured: dict = {}
+    client = _make_client(jobs, captured=captured)
+
+    list_recent_queries(client)
+
+    assert captured.get("all_users") is False
+
+
+def test_list_recent_queries_user_email_filters_client_side() -> None:
+    """user_email fetches all_users=True and keeps only matching jobs."""
+    jobs = [
+        _make_job(job_id="mine", user_email="me@example.com"),
+        _make_job(job_id="gustavo", user_email="gustavo.leca@moises.ai"),
+        _make_job(job_id="other", user_email="other@moises.ai"),
+    ]
+    captured: dict = {}
+    client = _make_client(jobs, captured=captured)
+
+    entries = list_recent_queries(client, user_email="gustavo.leca@moises.ai")
+
+    assert [e.job_id for e in entries] == ["gustavo"]
+    assert captured.get("all_users") is True
+
+
+def test_list_recent_queries_user_email_is_case_insensitive() -> None:
+    jobs = [
+        _make_job(job_id="g", user_email="Gustavo.Leca@Moises.AI"),
+    ]
+    client = _make_client(jobs)
+
+    entries = list_recent_queries(client, user_email="gustavo.leca@moises.ai")
+
+    assert [e.job_id for e in entries] == ["g"]
+
+
+def test_list_recent_queries_user_email_records_user_on_entry() -> None:
+    jobs = [_make_job(job_id="g", user_email="gustavo.leca@moises.ai")]
+    client = _make_client(jobs)
+
+    entries = list_recent_queries(client, user_email="gustavo.leca@moises.ai")
+
+    assert entries[0].user_email == "gustavo.leca@moises.ai"
+
+
+def test_list_recent_queries_user_email_empty_string_is_treated_as_unset() -> None:
+    """An empty/whitespace user_email must not silently filter to an empty user."""
+    jobs = [
+        _make_job(job_id="a", user_email="me@example.com"),
+        _make_job(job_id="b", user_email="other@example.com"),
+    ]
+    captured: dict = {}
+    client = _make_client(jobs, captured=captured)
+
+    entries = list_recent_queries(client, user_email="   ")
+
+    assert [e.job_id for e in entries] == ["a", "b"]
+    assert captured.get("all_users") is False
