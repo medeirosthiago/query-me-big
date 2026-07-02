@@ -156,36 +156,36 @@ def test_list_recent_queries_user_email_filters_client_side() -> None:
     """user_email fetches all_users=True and keeps only matching jobs."""
     jobs = [
         _make_job(job_id="mine", user_email="me@example.com"),
-        _make_job(job_id="gustavo", user_email="you@example.com"),
-        _make_job(job_id="other", user_email="other@moises.ai"),
+        _make_job(job_id="alice", user_email="alice@example.com"),
+        _make_job(job_id="bob", user_email="bob@example.com"),
     ]
     captured: dict = {}
     client = _make_client(jobs, captured=captured)
 
-    entries = list_recent_queries(client, user_email="you@example.com")
+    entries = list_recent_queries(client, user_email="alice@example.com")
 
-    assert [e.job_id for e in entries] == ["gustavo"]
+    assert [e.job_id for e in entries] == ["alice"]
     assert captured.get("all_users") is True
 
 
 def test_list_recent_queries_user_email_is_case_insensitive() -> None:
     jobs = [
-        _make_job(job_id="g", user_email="Gustavo.Leca@Moises.AI"),
+        _make_job(job_id="g", user_email="Alice.Example@Example.COM"),
     ]
     client = _make_client(jobs)
 
-    entries = list_recent_queries(client, user_email="you@example.com")
+    entries = list_recent_queries(client, user_email="alice.example@example.com")
 
     assert [e.job_id for e in entries] == ["g"]
 
 
 def test_list_recent_queries_user_email_records_user_on_entry() -> None:
-    jobs = [_make_job(job_id="g", user_email="you@example.com")]
+    jobs = [_make_job(job_id="g", user_email="alice@example.com")]
     client = _make_client(jobs)
 
-    entries = list_recent_queries(client, user_email="you@example.com")
+    entries = list_recent_queries(client, user_email="alice@example.com")
 
-    assert entries[0].user_email == "you@example.com"
+    assert entries[0].user_email == "alice@example.com"
 
 
 def test_list_recent_queries_user_email_empty_string_is_treated_as_unset() -> None:

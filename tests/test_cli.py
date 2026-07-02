@@ -134,11 +134,11 @@ def test_history_user_flag_threads_to_list_recent_queries(monkeypatch) -> None:
     monkeypatch.setattr("qmb.bigquery.history.list_recent_queries", fake_list)
 
     result = CliRunner().invoke(
-        cli.app, ["history", "--user", "you@example.com", "-d", "1"]
+        cli.app, ["history", "--user", "alice@example.com", "-d", "1"]
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["user_email"] == "you@example.com"
+    assert captured["user_email"] == "alice@example.com"
     assert captured["days"] == 1
 
 
