@@ -20,9 +20,16 @@ def export_results(
     output_path: Path,
 ) -> int:
     """Export all query results to the specified format. Returns row count."""
-    rows = iter_all_rows(client, handle)
-    schema = handle.schema_fields
+    return export_rows(iter_all_rows(client, handle), handle.schema_fields, fmt, output_path)
 
+
+def export_rows(
+    rows: Iterable[dict[str, Any]],
+    schema: list[SchemaField],
+    fmt: ExportFormat,
+    output_path: Path,
+) -> int:
+    """Export already-loaded rows to the specified format. Returns row count."""
     if fmt == ExportFormat.CSV:
         return _export_csv(rows, schema, output_path)
     if fmt == ExportFormat.JSON:

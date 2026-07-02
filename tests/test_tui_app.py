@@ -9,6 +9,8 @@ from textual.widgets import Input, OptionList, Tree
 
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.jobs.models import EngineMetadata, JobRecord, SourceMetadata
+from qmb.jobs.result_source import JsonlPreviewResultSource
+from qmb.jobs.store import JobStore
 from qmb.tui.app import QueryResultApp
 from qmb.types import AgentContext, ExportFormat, PageResult, QueryResultHandle
 from qmb.types import SchemaField as QmbSchemaField
@@ -270,6 +272,55 @@ def test_browser_only_mode_starts_with_browser_open(monkeypatch) -> None:
 
     monkeypatch.setattr("qmb.tui.app.fetch_page", _fake_fetch_page)
     asyncio.run(run())
+
+
+def test_tui_exports_archived_job_preview_rows(tmp_path: Path) -> None:
+    record = JobStore(
+        root=tmp_path / "jobs",
+        now=lambda: datetime(2026, 5, 12, 14, 33, 2, tzinfo=UTC),
+        nonce=lambda: "a1b2c3",
+    ).create(
+        resolved_sql="select id, name from example",
+        schema=[QmbSchemaField("id", "INTEGER"), QmbSchemaField("name", "STRING")],
+        preview_rows=[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}],
+        source=SourceMetadata(label="ad-hoc", input_mode="sql"),
+        engine=EngineMetadata(name="bigquery", job_id="bq-job-123", project="proj", location="US"),
+        total_rows=2,
+    )
+
+    async def run() -> Path:
+        source = JsonlPreviewResultSource.from_job(record)
+        app = QueryResultApp(
+            None,
+            QueryResultHandle(
+                job_id=record.qmb_job_id,
+                project=record.engine.project or "",
+                location=record.engine.location or "",
+                destination_table="",
+                schema=[field.to_mapping() for field in record.schema],
+                total_rows=source.total_rows,
+            ),
+            f"archive: {record.qmb_job_id}",
+            record.query_path.read_text(encoding="utf-8"),
+            result_source=source,
+        )
+        export_path = tmp_path / "archive.csv"
+
+        async with app.run_test(headless=True, size=(120, 40), notifications=True) as pilot:
+            await pilot.pause()
+            app._open_export_picker()
+            await pilot.pause()
+            app._select_export_format(0)
+            await pilot.pause()
+            app.query_one("#export-filter", Input).value = str(export_path)
+            await pilot.press("enter")
+            await pilot.pause()
+
+        return export_path
+
+    export_path = asyncio.run(run())
+
+    assert export_path.read_text(encoding="utf-8") == "id,name\n1,Alice\n2,Bob\n"
 
 
 def test_browser_enter_opens_dataset_details(monkeypatch) -> None:

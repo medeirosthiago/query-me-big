@@ -83,9 +83,7 @@ class ExportController:
         from qmb.tui import app as _app_module
 
         try:
-            count = _app_module.export_results(
-                self.app.bq_client, self.app.handle, export_format, path
-            )
+            count = self._export(export_format, path, _app_module)
             self.app._info(f"Exported {count:,} rows to {path}")
         except Exception as exc:
             self.app._error(f"Export failed: {exc}")
@@ -119,7 +117,17 @@ class ExportController:
         from qmb.tui import app as _app_module
 
         try:
-            count = _app_module.export_results(self.app.bq_client, self.app.handle, fmt, path)
+            count = self._export(fmt, path, _app_module)
             self.app._info(f"Exported {count:,} rows to {path}")
         except Exception as e:
             self.app._error(f"Export failed: {e}")
+
+    def _export(self, fmt: ExportFormat, path: Path, app_module) -> int:
+        if self.app.result_source is not None:
+            return app_module.export_rows(
+                self.app.result_source.iter_rows(),
+                self.app.handle.schema_fields,
+                fmt,
+                path,
+            )
+        return app_module.export_results(self.app.bq_client, self.app.handle, fmt, path)

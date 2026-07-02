@@ -32,7 +32,7 @@ from qmb.bigquery.browser import (
 from qmb.bigquery.catalog_information_schema import (
     list_tables_via_information_schema,
 )
-from qmb.bigquery.exporters import export_results  # re-exported for tests/monkeypatch  # noqa: F401
+from qmb.bigquery.exporters import export_results, export_rows  # noqa: F401
 from qmb.bigquery.history import QueryHistoryEntry
 from qmb.bigquery.pager import fetch_page, get_raw_value, json_default
 from qmb.integrations import clipboard
