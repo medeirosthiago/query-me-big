@@ -11,6 +11,13 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.6.1] - 2026-07-02
+
+### Fixed
+
+- Archived jobs opened in the TUI can export their stored preview rows to
+  CSV/JSON/parquet instead of requiring a live BigQuery destination table.
+
 ## [0.6.0] - 2026-07-01
 
 **Headline change — flat remote archive layout + session manifests.**
