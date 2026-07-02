@@ -36,7 +36,7 @@ class JsonlPreviewResultSource:
         start = page * page_size
         end = start + page_size
 
-        rows = list(read_jsonl_rows(self._record.preview_path))
+        rows = list(self.iter_rows())
         page_rows = rows[start:end]
         display_rows = [
             {key: _format_display(value) for key, value in row.items()} for row in page_rows
@@ -48,3 +48,6 @@ class JsonlPreviewResultSource:
             total_pages=total_pages,
             total_rows=self.total_rows,
         )
+
+    def iter_rows(self):
+        return read_jsonl_rows(self._record.preview_path)
