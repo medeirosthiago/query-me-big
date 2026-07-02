@@ -11,6 +11,14 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.6.2] - 2026-07-02
+
+### Changed
+
+- Removed hardcoded personal email and GCS bucket name from CLI help text,
+  docs, and examples; replaced with generic placeholders (`you@example.com`,
+  `gs://your-bucket/qmb/`).
+
 ## [0.6.1] - 2026-07-02
 
 ### Fixed
