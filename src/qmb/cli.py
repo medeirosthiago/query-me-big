@@ -1420,6 +1420,49 @@ def _load_job_or_exit(job_id: str, *, destination: str | None = None):
 
 
 @app.command()
+def web(
+    host: Annotated[
+        str | None,
+        typer.Option("--host", help="Bind host (default from config, fallback 127.0.0.1)."),
+    ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option("--port", help="Bind port (default from config, fallback 8850)."),
+    ] = None,
+    no_open: Annotated[
+        bool,
+        typer.Option("--no-open", help="Don't open a browser tab automatically."),
+    ] = False,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help=(
+                "Remote archive URI to include in the job index. Defaults to "
+                "QMB_REMOTE_ARCHIVE_URI or ~/.qmb/config.toml; remote data is "
+                "omitted entirely when unset."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Serve the local-only qmb web UI and read-only JSON API.
+
+    Binds a stdlib-only HTTP server (no new dependencies) and serves a JSON
+    API over local (and optionally remote) archived qmb jobs/sessions, plus
+    the static frontend once it exists. Runs until interrupted with Ctrl-C.
+    """
+    from qmb.config import remote_archive_uri, web_host, web_port
+    from qmb.web.server import serve
+
+    serve(
+        host=web_host(host),
+        port=web_port(port),
+        remote_destination=remote_archive_uri(destination),
+        open_browser=not no_open,
+    )
+
+
+@app.command()
 def describe(
     target: Annotated[
         str,
