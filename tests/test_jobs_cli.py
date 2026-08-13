@@ -550,6 +550,33 @@ def test_jobs_export_publishes_one_job_with_destination(
     assert calls == [(first.qmb_job_id, "500")]
 
 
+def test_jobs_export_prints_index_warning_to_stderr_in_text_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    first, _second = _seed_jobs(jobs_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+
+    class FakeRemote:
+        def export_job(self, record: Any, *, preview_rows: int | None = None) -> Any:
+            return _FakeRemoteResult(
+                record.qmb_job_id,
+                "exported",
+                warning="Remote index update failed (run `qmb jobs reindex --remote`): boom",
+            )
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: FakeRemote())
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "export", first.qmb_job_id, "--destination", "gs://bucket/qmb/"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert f"exported {first.qmb_job_id}" in result.output
+    assert "warning: Remote index update failed" in result.stderr
+
+
 def test_jobs_export_publishes_all_jobs_for_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -646,15 +673,17 @@ def test_jobs_import_session_uses_remote_archive(
             "status": "imported",
             "uri": "gs://bucket/qmb/qmb_job/",
             "error": None,
+            "warning": None,
         }
     ]
     assert imported == [("shared", True)]
 
 
 class _FakeRemoteResult:
-    def __init__(self, qmb_job_id: str, status: str) -> None:
+    def __init__(self, qmb_job_id: str, status: str, warning: str | None = None) -> None:
         self.qmb_job_id = qmb_job_id
         self.status = status
+        self.warning = warning
 
     def to_mapping(self) -> dict[str, Any]:
         return {
@@ -662,6 +691,7 @@ class _FakeRemoteResult:
             "status": self.status,
             "uri": f"gs://bucket/qmb/{self.qmb_job_id}/",
             "error": None,
+            "warning": self.warning,
         }
 
 
@@ -727,3 +757,57 @@ def test_jobs_reindex_reports_nothing_when_empty(
 
     assert result.exit_code == 0, result.output + result.stderr
     assert "No qmb sessions" in result.output
+
+
+def test_jobs_reindex_remote_rebuilds_and_writes_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`qmb jobs reindex --remote` scans the remote archive and writes index.json."""
+    built_index = {
+        "version": 1,
+        "updated_at": "2026-05-12T11:00:00+00:00",
+        "jobs": {
+            "qmb_job_1": {"qmb_job_id": "qmb_job_1"},
+            "qmb_job_2": {"qmb_job_id": "qmb_job_2"},
+        },
+    }
+    written: list[dict[str, Any]] = []
+
+    class FakeRemote:
+        def build_index(self) -> dict[str, Any]:
+            return built_index
+
+        def write_index(self, data: dict[str, Any]) -> None:
+            written.append(data)
+
+    destinations: list[str] = []
+
+    def fake_remote(destination: str) -> FakeRemote:
+        destinations.append(destination)
+        return FakeRemote()
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", fake_remote)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "reindex", "--remote", "--destination", "gs://bucket/qmb/", "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert json.loads(result.output) == {"jobs_indexed": 2}
+    assert destinations == ["gs://bucket/qmb/"]
+    assert written == [built_index]
+
+
+def test_jobs_reindex_remote_requires_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QMB_REMOTE_ARCHIVE_URI", raising=False)
+    monkeypatch.setattr("qmb.config.load_config", lambda: {})
+    monkeypatch.setattr(
+        "qmb.jobs.remote.get_remote_archive",
+        lambda destination: pytest.fail("should not build a remote archive without a destination"),
+    )
+
+    result = CliRunner().invoke(cli.app, ["jobs", "reindex", "--remote"])
+
+    assert result.exit_code != 0
+    assert "not configured" in (result.output + result.stderr)

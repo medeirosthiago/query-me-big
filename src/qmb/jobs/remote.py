@@ -6,6 +6,7 @@ import json
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +20,11 @@ from qmb.jobs.session_manifest import (
 from qmb.jobs.store import CorruptJobError, JobStore
 
 REMOTE_ARTIFACT_NAMES = ("metadata.json", "query.sql", "schema.json", "preview.jsonl")
+
+INDEX_BLOB_NAME = "index.json"
+INDEX_VERSION = 1
+INDEX_WRITE_ATTEMPTS = 5
+INDEX_EXCERPT_MAX_CHARS = 4000
 
 __all__ = [
     "GcsRemoteArchive",
@@ -41,6 +47,7 @@ class RemoteArchiveResult:
     status: str
     uri: str | None = None
     error: str | None = None
+    warning: str | None = None
 
     def to_mapping(self) -> dict[str, Any]:
         return {
@@ -48,6 +55,7 @@ class RemoteArchiveResult:
             "status": self.status,
             "uri": self.uri,
             "error": self.error,
+            "warning": self.warning,
         }
 
 
@@ -109,10 +117,19 @@ class GcsRemoteArchive:
         if session_id is not None:
             self._update_remote_manifest(session_id, record)
 
+        warning: str | None = None
+        try:
+            self._upsert_index_entry(_index_entry_for_record(record))
+        except RemoteArchiveError as exc:
+            warning = (
+                f"Remote index update failed (run `qmb jobs reindex --remote` to repair): {exc}"
+            )
+
         return RemoteArchiveResult(
             qmb_job_id=record.qmb_job_id,
             status="exported",
             uri=f"gs://{self.bucket_name}/{remote_prefix}/",
+            warning=warning,
         )
 
     def import_job(
@@ -156,7 +173,120 @@ class GcsRemoteArchive:
             for job_id in job_ids
         ]
 
+    def list_jobs(self) -> list[dict[str, Any]]:
+        """Return job index entries from ``index.json`` (empty if missing)."""
+        data, _generation = self._read_index()
+        jobs = data.get("jobs")
+        if not isinstance(jobs, dict):
+            return []
+        return list(jobs.values())
+
+    def list_sessions(self) -> list[SessionManifest]:
+        """Return every remote session manifest via a ``sessions/`` prefix scan."""
+        list_prefix = f"{self._join_prefix('sessions')}/"
+        manifests: list[SessionManifest] = []
+        for blob in self._client_or_default().list_blobs(self.bucket_name, prefix=list_prefix):
+            if not blob.name.endswith(".json"):
+                continue
+            try:
+                manifests.append(SessionManifest.from_json(blob.download_as_text()))
+            except Exception:
+                continue
+        return manifests
+
+    def build_index(self) -> dict[str, Any]:
+        """Rebuild the full index payload from a scan of every remote job.
+
+        Does not persist the result — used by ``reindex --remote`` and as an
+        explicit repair path when the incrementally-maintained index drifts.
+        """
+        list_prefix = f"{self.prefix}/" if self.prefix else ""
+        metadata_suffix = "/metadata.json"
+        bucket = self._bucket()
+        jobs: dict[str, Any] = {}
+        for blob in self._client_or_default().list_blobs(self.bucket_name, prefix=list_prefix):
+            if not blob.name.endswith(metadata_suffix) or "/sessions/" in blob.name:
+                continue
+            job_prefix = blob.name[: -len(metadata_suffix)]
+            qmb_job_id = job_prefix.rsplit("/", 1)[-1]
+            try:
+                metadata = json.loads(bucket.blob(blob.name).download_as_bytes().decode("utf-8"))
+            except Exception:
+                continue
+            try:
+                query_text = bucket.blob(f"{job_prefix}/query.sql").download_as_bytes().decode(
+                    "utf-8"
+                )
+            except Exception:
+                query_text = ""
+            jobs[qmb_job_id] = _index_entry_from_metadata(metadata, query_text)
+        return {
+            "version": INDEX_VERSION,
+            "updated_at": _utcnow_iso(),
+            "jobs": jobs,
+        }
+
+    def write_index(self, data: dict[str, Any]) -> None:
+        """Persist a full index payload to ``index.json``, unconditionally."""
+        bucket = self._bucket()
+        blob = bucket.blob(self._index_key())
+        blob.upload_from_string(json.dumps(data, indent=2), content_type="application/json")
+
     # -- Internals ---------------------------------------------------------
+
+    def _index_key(self) -> str:
+        return self._join_prefix(INDEX_BLOB_NAME)
+
+    def _read_index(self) -> tuple[dict[str, Any], int]:
+        """Return ``(index payload, generation)``; generation 0 means absent."""
+        bucket = self._bucket()
+        blob = bucket.blob(self._index_key())
+        try:
+            raw = blob.download_as_bytes()
+        except Exception:
+            return _empty_index(), 0
+        generation = getattr(blob, "generation", None) or 0
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _empty_index(), generation
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), dict):
+            return _empty_index(), generation
+        return data, generation
+
+    def _upsert_index_entry(self, entry: dict[str, Any]) -> None:
+        """Merge one job entry into the remote index, retrying on races.
+
+        Uses GCS generation preconditions for optimistic concurrency: reads
+        the current blob + generation, writes with ``if_generation_match``
+        (``0`` means "create, only if absent"), and re-reads/retries on a
+        ``PreconditionFailed`` from a concurrent writer. Never raises past
+        ``export_job`` — callers there degrade this to a warning, since
+        ``reindex --remote`` can always rebuild the index from a full scan.
+        """
+        from google.api_core.exceptions import PreconditionFailed
+
+        for _attempt in range(INDEX_WRITE_ATTEMPTS):
+            data, generation = self._read_index()
+            data = {
+                "version": INDEX_VERSION,
+                "updated_at": _utcnow_iso(),
+                "jobs": {**data.get("jobs", {}), entry["qmb_job_id"]: entry},
+            }
+            bucket = self._bucket()
+            blob = bucket.blob(self._index_key())
+            try:
+                blob.upload_from_string(
+                    json.dumps(data, indent=2),
+                    content_type="application/json",
+                    if_generation_match=generation,
+                )
+                return
+            except PreconditionFailed:
+                continue
+        raise RemoteArchiveError(
+            "Failed to update remote index.json after concurrent write retries"
+        )
 
     def _download_job(
         self,
@@ -363,3 +493,46 @@ def _validate_download(directory: Path, qmb_job_id: str) -> None:
             f"Remote metadata qmb_job_id mismatch: expected {qmb_job_id}, "
             f"got {metadata.get('qmb_job_id')}"
         )
+
+
+def _empty_index() -> dict[str, Any]:
+    return {"version": INDEX_VERSION, "updated_at": None, "jobs": {}}
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _collapse_excerpt(text: str) -> str:
+    """Return the first ``INDEX_EXCERPT_MAX_CHARS`` chars with whitespace collapsed."""
+    return " ".join(text[:INDEX_EXCERPT_MAX_CHARS].split())
+
+
+def _index_entry_for_record(record: Any) -> dict[str, Any]:
+    return {
+        "qmb_job_id": record.qmb_job_id,
+        "session_id": effective_session_id(record),
+        "created_at": record.created_at.isoformat(),
+        "engine": record.engine.name,
+        "source_label": record.source.label,
+        "total_rows": record.total_rows,
+        "bytes_processed": record.bytes_processed,
+        "query_excerpt": _collapse_excerpt(record.query_path.read_text(encoding="utf-8")),
+    }
+
+
+def _index_entry_from_metadata(metadata: dict[str, Any], query_text: str) -> dict[str, Any]:
+    stats = metadata.get("stats") or {}
+    source = metadata.get("source") or {}
+    engine = metadata.get("engine") or {}
+    session_id = metadata.get("session_id") or (metadata.get("agent") or {}).get("session_id")
+    return {
+        "qmb_job_id": metadata.get("qmb_job_id"),
+        "session_id": session_id,
+        "created_at": metadata.get("created_at"),
+        "engine": engine.get("name"),
+        "source_label": source.get("label"),
+        "total_rows": stats.get("total_rows", 0),
+        "bytes_processed": stats.get("bytes_processed", 0),
+        "query_excerpt": _collapse_excerpt(query_text),
+    }
