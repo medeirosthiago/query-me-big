@@ -30,6 +30,7 @@ __all__ = [
     "GcsRemoteArchive",
     "RemoteArchiveError",
     "RemoteArchiveResult",
+    "collapse_excerpt",
     "get_remote_archive",
     "safe_path_segment",
 ]
@@ -231,6 +232,37 @@ class GcsRemoteArchive:
         bucket = self._bucket()
         blob = bucket.blob(self._index_key())
         blob.upload_from_string(json.dumps(data, indent=2), content_type="application/json")
+
+    def fetch_job_artifacts(self, job_id: str) -> dict[str, Any]:
+        """Fetch one remote job's metadata/query/schema directly into memory.
+
+        Used by ``qmb web`` to serve remote-only job detail pages without
+        importing the job into a local :class:`~qmb.jobs.store.JobStore`.
+        """
+        remote_prefix = self._resolve_job_prefix(job_id)
+        bucket = self._bucket()
+        try:
+            metadata = json.loads(
+                bucket.blob(f"{remote_prefix}/metadata.json").download_as_bytes().decode("utf-8")
+            )
+            query = bucket.blob(f"{remote_prefix}/query.sql").download_as_bytes().decode("utf-8")
+            schema = json.loads(
+                bucket.blob(f"{remote_prefix}/schema.json").download_as_bytes().decode("utf-8")
+            )
+        except Exception as exc:
+            raise RemoteArchiveError(f"Cannot fetch remote qmb job: {job_id}") from exc
+        return {"metadata": metadata, "query": query, "schema": schema}
+
+    def fetch_preview_jsonl(self, job_id: str) -> str:
+        """Fetch the raw ``preview.jsonl`` text for one remote job."""
+        remote_prefix = self._resolve_job_prefix(job_id)
+        bucket = self._bucket()
+        try:
+            return bucket.blob(f"{remote_prefix}/preview.jsonl").download_as_bytes().decode(
+                "utf-8"
+            )
+        except Exception as exc:
+            raise RemoteArchiveError(f"Cannot fetch remote preview for: {job_id}") from exc
 
     # -- Internals ---------------------------------------------------------
 
@@ -452,7 +484,7 @@ class _SimpleRecord:
     agent_context: Any | None
 
     @classmethod
-    def from_metadata(cls, data: dict[str, Any]) -> "_SimpleRecord":
+    def from_metadata(cls, data: dict[str, Any]) -> _SimpleRecord:
         agent_data = data.get("agent")
         agent = None
         if isinstance(agent_data, dict):
@@ -503,8 +535,12 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _collapse_excerpt(text: str) -> str:
-    """Return the first ``INDEX_EXCERPT_MAX_CHARS`` chars with whitespace collapsed."""
+def collapse_excerpt(text: str) -> str:
+    """Return the first ``INDEX_EXCERPT_MAX_CHARS`` chars with whitespace collapsed.
+
+    Shared by the remote index builder and the local ``qmb web`` index
+    assembly so both produce excerpts with identical semantics.
+    """
     return " ".join(text[:INDEX_EXCERPT_MAX_CHARS].split())
 
 
@@ -517,7 +553,7 @@ def _index_entry_for_record(record: Any) -> dict[str, Any]:
         "source_label": record.source.label,
         "total_rows": record.total_rows,
         "bytes_processed": record.bytes_processed,
-        "query_excerpt": _collapse_excerpt(record.query_path.read_text(encoding="utf-8")),
+        "query_excerpt": collapse_excerpt(record.query_path.read_text(encoding="utf-8")),
     }
 
 
@@ -534,5 +570,5 @@ def _index_entry_from_metadata(metadata: dict[str, Any], query_text: str) -> dic
         "source_label": source.get("label"),
         "total_rows": stats.get("total_rows", 0),
         "bytes_processed": stats.get("bytes_processed", 0),
-        "query_excerpt": _collapse_excerpt(query_text),
+        "query_excerpt": collapse_excerpt(query_text),
     }
