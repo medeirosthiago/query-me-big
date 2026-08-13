@@ -9,7 +9,36 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
-_No released changes yet._
+### Added
+
+- `qmb web` — serve a local, read-only web UI and JSON API over archived qmb
+  jobs/sessions. Stdlib-only `ThreadingHTTPServer` (no new dependencies)
+  exposing `/api/index`, `/api/jobs/{id}`, and `/api/jobs/{id}/preview`;
+  `--host`, `--port`, `--no-open`, `--destination` flags; `[web].host` /
+  `[web].port` config and `QMB_WEB_HOST` / `QMB_WEB_PORT` env vars, both with
+  the standard CLI-flag > env > config > default precedence.
+- Bundled Preact + TypeScript frontend for `qmb web` (source in `web/`, built
+  assets shipped in the wheel under `src/qmb/web/static/`): two-pane
+  fuzzy-search-as-you-type over jobs and sessions, job detail with
+  highlighted SQL/metadata/schema/preview and reproduce commands, and a
+  session view that synthesizes a `derived: true` session summary from
+  matching jobs when a `session_id` has no manifest entry in `/api/index`
+  (pre-manifest jobs, a failed manifest write, or an unexported remote
+  manifest).
+- Remote job index (`index.json`) at the remote archive root, maintained
+  incrementally on `qmb jobs export` / `qmb run --publish` and backing
+  `qmb web`'s remote job listing. `qmb jobs reindex --remote` rebuilds it
+  from a full scan of the remote archive (backfill or repair after a failed
+  incremental update).
+- Shared `qmb.search.fuzzy` module extracted from the catalog browser's
+  scorer, now reused by both `qmb browse` and the `qmb web` frontend (ported
+  to TypeScript).
+
+### Changed
+
+- `qmb jobs export` / `qmb run --publish` degrade a failed remote index
+  update to a non-fatal warning (pointing at `qmb jobs reindex --remote`)
+  instead of failing the export.
 
 ## [0.6.2] - 2026-07-02
 

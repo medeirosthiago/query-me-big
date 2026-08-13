@@ -119,7 +119,8 @@ qmb browse -t
 | `qmb jobs open JOB_ID` | Open an archived qmb job's row preview in the TUI. |
 | `qmb jobs export [JOB_ID]` | Publish one job or a session of jobs to remote archive storage. |
 | `qmb jobs import [JOB_ID]` | Import one job or a session of jobs from remote archive storage. |
-| `qmb jobs reindex` | Rebuild local session manifests from a full job scan. |
+| `qmb jobs reindex` | Rebuild local session manifests from a full job scan. `--remote` rebuilds the remote job index instead. |
+| `qmb web` | Serve a local read-only web UI + JSON API over archived jobs/sessions. |
 | `qmb --version` / `-V` | Print the installed qmb version. |
 | `qmb --help` | Top-level command list. Every subcommand also accepts `--help`. |
 
@@ -232,7 +233,7 @@ for older archives that only stored the session inside `agent.session_id`.
 | `--session-id ID` / `--session ID` | | Filter to jobs tagged with this session id. |
 | `--parent-job-id ID` | | Filter to jobs that descend from this parent qmb job id. |
 | `--limit N` | `-l` | Number of records returned (default `50`). |
-| `--all` | | Return all matching jobs instead of the default newest 10. |
+| `--all` | | Return all matching jobs instead of the default newest 50. |
 | `--agent TEXT` | | Filter by agent/tool name (case-insensitive contains). |
 | `--date YYYY-MM-DD` | | Filter to jobs created on this UTC date. |
 | `--since DATE_OR_TIME` | | Filter to jobs created at/after a UTC date or ISO datetime. |
@@ -317,6 +318,16 @@ manifest is a regenerable index from session id to job ids plus cached
 aggregates — never the source of truth. `metadata.json` inside each job
 remains authoritative for that job's `session_id`.
 
+A top-level `index.json` (also regenerable, never the source of truth)
+maintains a `qmb_job_id → {session_id, created_at, engine, source_label,
+stats, query_excerpt}` map for fast listing/search without a full bucket
+scan — it backs `qmb web`'s remote job list. It's updated incrementally on
+every `qmb jobs export` / `qmb run --publish` (optimistic-concurrency
+read-modify-write with retries against GCS generation preconditions); if
+that update fails after retries, export still succeeds and prints a warning
+telling you to run `qmb jobs reindex --remote` to repair it. Run that command
+any time to rebuild `index.json` from scratch via a full scan.
+
 | Flag | Description |
 |---|---|
 | `JOB_ID` (optional positional) | Full or partial qmb job id to publish. |
@@ -348,9 +359,60 @@ Reads each job's `metadata.json`, regroups by `session_id`, and writes one
 manifest per session. Session-less jobs are skipped, matching `jobs sessions`.
 Safe to run repeatedly — manifests are idempotent over the same job set.
 
+With `--remote`, rebuilds the remote `index.json` instead by scanning every
+job archived at the remote destination. Use this to backfill the index for
+jobs exported before it existed, or to repair it after a failed incremental
+update (e.g. following an export warning).
+
 | Flag | Description |
 |---|---|
-| `--format text\|json` | Output format (default `text`). JSON emits `{"sessions_rebuilt": N}`. |
+| `--format text\|json` | Output format (default `text`). JSON emits `{"sessions_rebuilt": N}` (local) or `{"jobs_indexed": N}` (`--remote`). |
+| `--remote` | Rebuild the remote job index instead of local session manifests. |
+| `--destination URI` | Remote archive destination URI. Only used with `--remote`; defaults through env/config, required when unset everywhere. |
+
+### `qmb web`
+
+Serve a local, read-only web UI and JSON API over archived qmb jobs and
+sessions. A stdlib-only `ThreadingHTTPServer` — no new runtime dependencies —
+binds a port, prints the URL, opens a browser tab, and serves until Ctrl-C.
+
+| Flag | Description |
+|---|---|
+| `--host HOST` | Bind host. Defaults through config/env (see below), falling back to `127.0.0.1`. |
+| `--port N` | Bind port. Defaults through config/env (see below), falling back to `8850`. |
+| `--no-open` | Don't open a browser tab automatically. |
+| `--destination URI` | Remote archive URI to include in the job index. Defaults to `QMB_REMOTE_ARCHIVE_URI` or `~/.qmb/config.toml`; remote data is omitted entirely when unset. |
+
+API endpoints (also used by the bundled frontend):
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/index` | Local (and, if configured, remote) jobs + sessions, each tagged with `origin: local\|remote\|both`. Pass `?refresh=1` to bypass the in-memory cache. |
+| `GET /api/jobs/{id}` | Metadata, resolved SQL, and schema for one job. Fetches on demand from the remote archive if the job isn't local. |
+| `GET /api/jobs/{id}/preview` | Paginated row preview (`?page=`, `?page_size=`, default page size `200`). Reads local `preview.jsonl` or fetches the remote preview on demand. |
+
+Bind host/port precedence is CLI flag → `QMB_WEB_HOST` / `QMB_WEB_PORT` →
+`[web].host` / `[web].port` in `~/.qmb/config.toml` → the `127.0.0.1` / `8850`
+defaults:
+
+```toml
+[web]
+host = "127.0.0.1"
+port = 8850
+```
+
+Remote jobs/sessions only appear when a remote archive is configured (same
+precedence as everywhere else: `--destination`, `QMB_REMOTE_ARCHIVE_URI`,
+`~/.qmb/config.toml`). Each entry's `origin` is `local`, `remote`, or `both`
+(present in both, local fields win). If the remote archive is configured but
+unreachable, `/api/index` degrades gracefully: it returns local-only data plus
+a top-level `remote_error` field instead of failing the request.
+
+The frontend lives in `web/` (Vite + Preact + TypeScript, not part of the
+installed package) and is built separately: `npm install && npm run build`
+inside `web/` emits static assets straight into `src/qmb/web/static/`, which
+are committed and shipped in the wheel, so end users never need Node —
+`qmb web` just serves whatever is already in `static/`.
 
 ## JSON output schemas
 
@@ -522,7 +584,7 @@ and arbitrary `metadata` from `--meta` / `QMB_AGENT_META_JSON`.
 Inspect or replay without touching BigQuery:
 
 ```bash
-qmb jobs list                            # newest 10, text, shows session:<id>
+qmb jobs list                            # newest 50, text, shows session:<id>
 qmb jobs list --all --format json        # all jobs, machine-readable
 qmb jobs list --limit 25                 # newest 25 matching jobs
 qmb jobs sessions                        # session ids, newest first
@@ -648,6 +710,13 @@ Mirror local job archives to GCS for sharing or cross-machine recovery.
 | `QMB_REMOTE_ARCHIVE_URI` | Remote archive destination (e.g. `gs://your-bucket/qmb/`). Falls back to `~/.qmb/config.toml` `[remote_archive].uri`; remote features are disabled when unset. |
 | `QMB_REMOTE_ARCHIVE_PREVIEW_ROWS` | Preview rows published per job (default `500`). Also settable via `[remote_archive].preview_rows`. |
 
+### Web UI
+
+| Variable | Purpose |
+|---|---|
+| `QMB_WEB_HOST` | Bind host for `qmb web`. Falls back to `~/.qmb/config.toml` `[web].host`, then `127.0.0.1`. |
+| `QMB_WEB_PORT` | Bind port for `qmb web`. Falls back to `~/.qmb/config.toml` `[web].port`, then `8850`. |
+
 ### Local archive + caches
 
 | Variable | Purpose |
@@ -723,6 +792,8 @@ Layered, CLI-first. The TUI is one renderer among several.
   index), `remote.py` (GCS remote archive backend).
 - `src/qmb/tui/` — Textual app with vim-style keybindings, inline bottom
   pickers, browser pane, history/jobs pickers, and nvim integration.
+- `src/qmb/web/` — stdlib-only JSON API + static file server for `qmb web`
+  (`server.py`); `static/` ships the built frontend assets in the wheel.
 - `src/qmb/integrations/` — editor (nvim) and clipboard helpers.
 - `src/qmb/types.py` — shared dataclasses and enums (`QueryRequest`,
   `ResolvedQuery`, `QueryResultHandle`, `PageResult`, `InputMode`,
