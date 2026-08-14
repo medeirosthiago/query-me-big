@@ -20,7 +20,7 @@ export function SqlView({ sql }: { sql: string }) {
     <div class="sql-view-wrap">
       <button
         type="button"
-        class="sql-view__copy-btn"
+        class="icon-btn sql-view__copy-btn"
         aria-label="Copy"
         title="Copy"
         onClick={copy}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { fetchIndex } from "./api";
 import { Banner } from "./components/Banner";
+import { Icon } from "./components/Icon";
 import { JobDetail } from "./components/JobDetail";
 import { SessionDetail } from "./components/SessionDetail";
 import { deriveMissingSessions } from "./deriveSessions";
@@ -16,61 +17,13 @@ type Theme = "auto" | "latte" | "mocha";
 const THEME_KEY = "qmb-theme";
 
 function ThemeIcon({ theme }: { theme: Theme }) {
-  const common = {
-    width: 14,
-    height: 14,
-    viewBox: "0 0 14 14",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": 1.3,
-    "stroke-linecap": "round" as const,
-    "stroke-linejoin": "round" as const,
-    "aria-hidden": true,
-  };
-  if (theme === "latte") {
-    // sun
-    return (
-      <svg {...common}>
-        <circle cx="7" cy="7" r="2.6" />
-        <path d="M7 0.8v1.6M7 11.6v1.6M0.8 7h1.6M11.6 7h1.6M2.5 2.5l1.1 1.1M10.4 10.4l1.1 1.1M11.5 2.5l-1.1 1.1M3.6 10.4l-1.1 1.1" />
-      </svg>
-    );
-  }
-  if (theme === "mocha") {
-    // moon
-    return (
-      <svg {...common}>
-        <path d="M9.6 1.6a5.6 5.6 0 1 0 2.8 8.7A5.9 5.9 0 0 1 9.6 1.6Z" />
-      </svg>
-    );
-  }
-  // auto: half-filled circle
-  return (
-    <svg {...common}>
-      <circle cx="7" cy="7" r="5.4" />
-      <path d="M7 1.6a5.4 5.4 0 0 1 0 10.8Z" fill="currentColor" stroke="none" />
-    </svg>
-  );
+  if (theme === "latte") return <Icon name="sun" />;
+  if (theme === "mocha") return <Icon name="moon" />;
+  return <Icon name="sun-moon" />;
 }
 
 function RefreshIcon({ spinning }: { spinning: boolean }) {
-  return (
-    <svg
-      width={14}
-      height={14}
-      viewBox="0 0 14 14"
-      fill="none"
-      stroke="currentColor"
-      stroke-width={1.3}
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden={true}
-      class={spinning ? "refresh-icon--spinning" : ""}
-    >
-      <path d="M11.8 7A4.8 4.8 0 1 1 10.3 3.6" />
-      <path d="M11.8 2.6v3.2h-3.2" />
-    </svg>
-  );
+  return <Icon name="refresh" class={spinning ? "refresh-icon--spinning" : ""} />;
 }
 
 const HOLD_MS = 600;
@@ -301,7 +254,7 @@ export function App() {
           />
           <button
             type="button"
-            class="refresh-btn"
+            class="icon-btn refresh-btn"
             title="Refresh"
             aria-label="Refresh"
             onClick={() => load(true)}
@@ -311,7 +264,7 @@ export function App() {
           </button>
           <button
             type="button"
-            class="theme-toggle"
+            class="icon-btn theme-toggle"
             title={`Theme: ${theme} - click to toggle light/dark, press and hold for auto (system)`}
             aria-label={`Theme: ${theme} - click to toggle light/dark, press and hold for auto (system)`}
             {...holdToggle}
