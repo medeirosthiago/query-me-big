@@ -67,6 +67,43 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
         <span class={`badge badge--${origin}`}>{origin}</span>
       </header>
 
+      <section class="detail__section">
+        <h3>
+          Preview
+          {preview && ` — ${fmtNumber(preview.total)} rows`}
+        </h3>
+        {previewError && <div class="pane-error">Failed to load preview: {previewError}</div>}
+        {preview && (
+          <>
+            <div class="table-scroll">
+              <table class="preview-table">
+                <thead>
+                  <tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((row, i) => (
+                    <tr key={i}>
+                      {columns.map((c) => <td key={c}>{formatCell(row[c])}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {totalPages > 1 && (
+              <div class="pager">
+                <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                  Prev
+                </button>
+                <span>Page {preview.page} of {totalPages}</span>
+                <button type="button" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
       <SqlView sql={detail.query} />
 
       <section class="detail__grid">
@@ -159,43 +196,6 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
           </table>
         </section>
       )}
-
-      <section class="detail__section">
-        <h3>
-          Preview
-          {preview && ` — ${fmtNumber(preview.total)} rows`}
-        </h3>
-        {previewError && <div class="pane-error">Failed to load preview: {previewError}</div>}
-        {preview && (
-          <>
-            <div class="table-scroll">
-              <table class="preview-table">
-                <thead>
-                  <tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {preview.rows.map((row, i) => (
-                    <tr key={i}>
-                      {columns.map((c) => <td key={c}>{formatCell(row[c])}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {totalPages > 1 && (
-              <div class="pager">
-                <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                  Prev
-                </button>
-                <span>Page {preview.page} of {totalPages}</span>
-                <button type="button" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                  Next
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
     </div>
   );
 }
