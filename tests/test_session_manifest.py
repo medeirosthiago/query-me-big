@@ -21,7 +21,7 @@ def _record(
     bytes_processed: int = 100,
     agent_name: str | None = "pi",
     agent_task: str | None = "investigate billing",
-    agent_cwd: str | None = "/Users/mds/src/moises",
+    agent_cwd: str | None = "/home/user/src/proj-b",
     agent_session_id: str | None = None,
 ) -> SimpleNamespace:
     agent = None
@@ -58,7 +58,7 @@ def test_update_manifest_with_job_starts_a_fresh_manifest() -> None:
     assert manifest.latest == "2026-07-01T12:00:00+00:00"
     assert manifest.agents == ("pi",)
     assert manifest.tasks == ("investigate billing",)
-    assert manifest.cwds == ("/Users/mds/src/moises",)
+    assert manifest.cwds == ("/home/user/src/proj-b",)
     assert manifest.updated_at == "2026-07-01T12:00:00+00:00"
 
 
@@ -74,7 +74,7 @@ def test_update_manifest_with_job_appends_and_recomputes_aggregates() -> None:
         bytes_processed=1500,
         agent_name="codex",
         agent_task="build dashboard",
-        agent_cwd="/Users/mds/src/lab",
+        agent_cwd="/home/user/src/proj-a",
     )
 
     manifest = update_manifest_with_job(None, first)
@@ -87,7 +87,7 @@ def test_update_manifest_with_job_appends_and_recomputes_aggregates() -> None:
     assert manifest.latest == "2026-07-01T13:00:00+00:00"
     assert manifest.agents == ("codex", "pi")
     assert manifest.tasks == ("build dashboard", "investigate billing")
-    assert manifest.cwds == ("/Users/mds/src/lab", "/Users/mds/src/moises")
+    assert manifest.cwds == ("/home/user/src/proj-a", "/home/user/src/proj-b")
 
 
 def test_update_manifest_with_job_is_idempotent_on_replay() -> None:

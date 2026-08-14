@@ -13,13 +13,13 @@ def test_load_returns_none_when_file_missing(tmp_path: Path) -> None:
 
 def test_save_then_load_roundtrip(tmp_path: Path) -> None:
     regions_cache.save_regions(
-        "data-platform-production-3573",
+        "example-project-123",
         ["us-west1", "US"],
         cache_dir=tmp_path,
     )
 
     loaded = regions_cache.load_regions(
-        "data-platform-production-3573", cache_dir=tmp_path
+        "example-project-123", cache_dir=tmp_path
     )
 
     # Sorted & deduplicated by the cache layer.
