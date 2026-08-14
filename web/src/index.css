@@ -1,0 +1,735 @@
+/* ---------------------------------------------------------------------- */
+/* Catppuccin theme tokens                                                */
+/*                                                                        */
+/* Palettes are the official Catppuccin hex values (catppuccin.com).      */
+/* Light default = Latte, dark = Mocha (via prefers-color-scheme).        */
+/* [data-theme="latte"|"mocha"] on the root element forces a choice       */
+/* regardless of system preference (set by the in-app theme toggle).      */
+/* Semantic tokens (--bg, --text, --accent, ...) are derived from the     */
+/* raw --ctp-* palette so component CSS never references palette names    */
+/* directly.                                                              */
+/* ---------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Catppuccin Latte */
+  --ctp-rosewater: #dc8a78;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink: #ea76cb;
+  --ctp-mauve: #8839ef;
+  --ctp-red: #d20f39;
+  --ctp-maroon: #e64553;
+  --ctp-peach: #fe640b;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-teal: #179299;
+  --ctp-sky: #04a5e5;
+  --ctp-sapphire: #209fb5;
+  --ctp-blue: #1e66f5;
+  --ctp-lavender: #7287fd;
+  --ctp-text: #4c4f69;
+  --ctp-subtext1: #5c5f77;
+  --ctp-subtext0: #6c6f85;
+  --ctp-overlay2: #7c7f93;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-surface2: #acb0be;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface0: #ccd0da;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    /* Catppuccin Mocha */
+    --ctp-rosewater: #f5e0dc;
+    --ctp-flamingo: #f2cdcd;
+    --ctp-pink: #f5c2e7;
+    --ctp-mauve: #cba6f7;
+    --ctp-red: #f38ba8;
+    --ctp-maroon: #eba0ac;
+    --ctp-peach: #fab387;
+    --ctp-yellow: #f9e2af;
+    --ctp-green: #a6e3a1;
+    --ctp-teal: #94e2d5;
+    --ctp-sky: #89dceb;
+    --ctp-sapphire: #74c7ec;
+    --ctp-blue: #89b4fa;
+    --ctp-lavender: #b4befe;
+    --ctp-text: #cdd6f4;
+    --ctp-subtext1: #bac2de;
+    --ctp-subtext0: #a6adc8;
+    --ctp-overlay2: #9399b2;
+    --ctp-overlay1: #7f849c;
+    --ctp-overlay0: #6c7086;
+    --ctp-surface2: #585b70;
+    --ctp-surface1: #45475a;
+    --ctp-surface0: #313244;
+    --ctp-base: #1e1e2e;
+    --ctp-mantle: #181825;
+    --ctp-crust: #11111b;
+  }
+}
+
+/* Explicit theme overrides — win over prefers-color-scheme in both
+   directions because they're declared after the @media block above and
+   share the same selector specificity as :root on the <html> element. */
+
+[data-theme="latte"] {
+  color-scheme: light;
+  --ctp-rosewater: #dc8a78;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink: #ea76cb;
+  --ctp-mauve: #8839ef;
+  --ctp-red: #d20f39;
+  --ctp-maroon: #e64553;
+  --ctp-peach: #fe640b;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-teal: #179299;
+  --ctp-sky: #04a5e5;
+  --ctp-sapphire: #209fb5;
+  --ctp-blue: #1e66f5;
+  --ctp-lavender: #7287fd;
+  --ctp-text: #4c4f69;
+  --ctp-subtext1: #5c5f77;
+  --ctp-subtext0: #6c6f85;
+  --ctp-overlay2: #7c7f93;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-surface2: #acb0be;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface0: #ccd0da;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+}
+
+[data-theme="mocha"] {
+  color-scheme: dark;
+  --ctp-rosewater: #f5e0dc;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink: #f5c2e7;
+  --ctp-mauve: #cba6f7;
+  --ctp-red: #f38ba8;
+  --ctp-maroon: #eba0ac;
+  --ctp-peach: #fab387;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-sapphire: #74c7ec;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext1: #bac2de;
+  --ctp-subtext0: #a6adc8;
+  --ctp-overlay2: #9399b2;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay0: #6c7086;
+  --ctp-surface2: #585b70;
+  --ctp-surface1: #45475a;
+  --ctp-surface0: #313244;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+}
+
+/* Semantic tokens, derived from the palette above. Component CSS should
+   only ever reference these, never --ctp-* directly. */
+:root {
+  --bg: var(--ctp-base);
+  --bg-raised: var(--ctp-mantle);
+  --bg-hover: var(--ctp-surface0);
+  --bg-selected: color-mix(in srgb, var(--ctp-blue) 18%, var(--ctp-mantle));
+  --border: var(--ctp-surface1);
+  --text: var(--ctp-text);
+  --text-dim: var(--ctp-subtext0);
+  --text-faint: var(--ctp-overlay1);
+  --accent: var(--ctp-blue);
+  --accent-dim: color-mix(in srgb, var(--ctp-blue) 35%, var(--ctp-surface0));
+  --danger: var(--ctp-red);
+  --danger-bg: color-mix(in srgb, var(--ctp-red) 14%, var(--bg));
+
+  --badge-local: var(--ctp-green);
+  --badge-local-border: color-mix(in srgb, var(--ctp-green) 45%, var(--border));
+  --badge-remote: var(--ctp-yellow);
+  --badge-remote-border: color-mix(in srgb, var(--ctp-yellow) 45%, var(--border));
+  --badge-both: var(--ctp-blue);
+  --badge-both-border: var(--accent-dim);
+  --badge-derived: var(--ctp-peach);
+  --badge-derived-border: color-mix(in srgb, var(--ctp-peach) 45%, var(--border));
+
+  --notice-border: color-mix(in srgb, var(--ctp-yellow) 55%, transparent);
+
+  --sql-keyword: var(--ctp-mauve);
+  --sql-string: var(--ctp-green);
+  --sql-number: var(--ctp-peach);
+  --sql-comment: var(--ctp-overlay1);
+  --sql-identifier: var(--ctp-teal);
+  --sql-punctuation: var(--ctp-subtext0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+#app {
+  height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+.app {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Left pane */
+
+.left-pane {
+  width: 380px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Shared icon-button family: toolbar refresh/theme, SQL copy, copy-line copy.
+   One color pair (muted at rest, brighter on hover) so every icon button
+   reads as the same visual family. */
+.icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.icon-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.icon-btn svg {
+  flex: none;
+}
+
+.refresh-btn,
+.theme-toggle {
+  flex: none;
+}
+
+.refresh-icon--spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.row--cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.row--selected {
+  background: var(--bg-selected);
+}
+
+.row__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.row__id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__excerpt {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__meta {
+  margin-top: 4px;
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.row__session {
+  font-family: var(--mono);
+}
+
+.list-footer {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* Badges */
+
+.badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  flex: none;
+}
+
+.badge--local {
+  color: var(--badge-local);
+  border-color: var(--badge-local-border);
+}
+
+.badge--remote {
+  color: var(--badge-remote);
+  border-color: var(--badge-remote-border);
+}
+
+.badge--both {
+  color: var(--badge-both);
+  border-color: var(--badge-both-border);
+}
+
+.badge--derived {
+  color: var(--badge-derived);
+  border-color: var(--badge-derived-border);
+  border-style: dashed;
+}
+
+/* Right pane */
+
+.right-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 28px;
+}
+
+.empty-state,
+.pane-loading {
+  color: var(--text-faint);
+  padding: 40px 0;
+  text-align: center;
+}
+
+.pane-error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.notice {
+  background: var(--bg-raised);
+  border: 1px dashed var(--notice-border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.notice code {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.notice .copy-line {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.banner__dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 13px;
+}
+
+.detail__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.detail__header h2 {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  word-break: break-all;
+}
+
+.detail__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 24px;
+  margin-bottom: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.field--wide {
+  grid-column: 1 / -1;
+}
+
+.field__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.field__value {
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.detail__section {
+  margin-bottom: 24px;
+}
+
+.detail__section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+
+/* SQL view */
+
+.sql-view-wrap {
+  position: relative;
+  margin: 0 0 20px;
+}
+
+.sql-view {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sql-view__copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.sql-view-wrap:hover .sql-view__copy-btn,
+.sql-view__copy-btn:hover,
+.sql-view__copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.sql-tok--keyword {
+  color: var(--sql-keyword);
+  font-weight: 600;
+}
+
+.sql-tok--string {
+  color: var(--sql-string);
+}
+
+.sql-tok--number {
+  color: var(--sql-number);
+}
+
+.sql-tok--comment {
+  color: var(--sql-comment);
+  font-style: italic;
+}
+
+.sql-tok--identifier {
+  color: var(--sql-identifier);
+}
+
+.sql-tok--punctuation {
+  color: var(--sql-punctuation);
+}
+
+/* Copy lines */
+
+.copy-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.copy-line code {
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.copy-line__btn {
+  flex: none;
+}
+
+/* Tables */
+
+.schema-table,
+.preview-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.schema-table th,
+.schema-table td,
+.preview-table th,
+.preview-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.preview-table {
+  font-family: var(--mono);
+}
+
+.table-scroll {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.table-scroll .preview-table {
+  border: none;
+}
+
+.table-scroll .preview-table th,
+.table-scroll .preview-table td {
+  border-width: 0 0 1px 1px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.pager button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.pager button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Session detail */
+
+.session-job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.session-job-list li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-job-list__meta {
+  color: var(--text-dim);
+  font-family: var(--sans);
+}

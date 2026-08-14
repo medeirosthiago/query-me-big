@@ -4,6 +4,9 @@ import fnmatch
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from qmb.search.fuzzy import fuzzy_score as _fuzzy_score
+from qmb.search.fuzzy import normalize as _normalize
+
 
 @dataclass(frozen=True)
 class BrowserMatch:
@@ -70,33 +73,6 @@ def _best_score(query: str, *candidates: str) -> int | None:
     scores = [_fuzzy_score(query, candidate) for candidate in candidates]
     valid_scores = [score for score in scores if score is not None]
     return max(valid_scores) if valid_scores else None
-
-
-def _fuzzy_score(query: str, candidate: str) -> int | None:
-    normalized_candidate = _normalize(candidate)
-    if query in normalized_candidate:
-        return 100 + len(query) * 4 - (len(normalized_candidate) - len(query))
-
-    query_index = 0
-    score = 0
-    consecutive = 0
-    for char in normalized_candidate:
-        if query_index >= len(query):
-            break
-        if char != query[query_index]:
-            consecutive = 0
-            continue
-        query_index += 1
-        consecutive += 1
-        score += 4 + consecutive * 2
-
-    if query_index != len(query):
-        return None
-    return score - len(normalized_candidate)
-
-
-def _normalize(value: str) -> str:
-    return value.strip().lower().replace(":", ".")
 
 
 def _is_glob_query(query: str) -> bool:

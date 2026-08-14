@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 1 55 55" role="img" aria-label="qmb">
+  <defs>
+    <!-- The approved mark: a rounded Q with a compact lightning-bolt tail. -->
+    <path
+      id="q-silhouette"
+      d="M27 5a22 22 0 1 0 10.95 41.08l3.55 2.3-2.28 2.2 8.03 5.17-1.15-4.18 4.15-3.57-5.6-1.18 2.1-3.57-6.5-2.4A22 22 0 0 0 27 5Zm0 12a10 10 0 1 1 0 20 10 10 0 0 1 0-20Z"
+      fill-rule="evenodd"
+    />
+
+    <!-- A deeper rear copy supplies the visible cubic extrusion. -->
+    <mask id="depth-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="black" />
+      <use href="#q-silhouette" transform="translate(4 -4)" fill="white" />
+      <!-- Keep the inner counter clean: no rainbow-colored inner border. -->
+      <circle cx="27" cy="27" r="10" fill="black" />
+    </mask>
+
+    <clipPath id="front-clip">
+      <use href="#q-silhouette" />
+    </clipPath>
+  </defs>
+
+  <!-- Catppuccin Mocha depth faces: mauve side, teal top. -->
+  <g mask="url(#depth-mask)">
+    <rect width="64" height="64" fill="#CBA6F7" />
+    <path d="M0 0H64V26H0Z" fill="#94E2D5" />
+  </g>
+
+  <!-- Continuous blue front face. -->
+  <use href="#q-silhouette" fill="#89B4FA" />
+
+  <!-- Small cuboid ledge grown from the lower-right inner rim. Its blue face
+       overlaps the Q, so it reads as one letter instead of a pasted-on cube. -->
+  <g clip-path="url(#front-clip)">
+    <path d="M27 34.5 32 32l4 2-5 2.5Z" fill="#94E2D5" />
+    <path d="m31 36.5 5-2v5l-5 2.5Z" fill="#CBA6F7" />
+  </g>
+  <path d="M27 34.5 31 36.5V42l-4-2Z" fill="#89B4FA" />
+  <path d="M27 34.5 32 32l4 2-5 2.5Z" fill="#94E2D5" />
+  <path d="m31 36.5 5-2v5l-5 2.5Z" fill="#CBA6F7" />
+
+  <!-- Teal top facets keep the stepped bolt visibly cubic at favicon sizes. -->
+  <path d="m40.25 40.85 4.4 1.97 2.1.43-3.65 1.35Z" fill="#94E2D5" />
+  <path d="m39.22 50.58 3.18-3.06 4.85 1.01-3.25 1.94Z" fill="#94E2D5" />
+</svg>

@@ -1262,6 +1262,20 @@ def jobs_import(
 
 @jobs_app.command("reindex")
 def jobs_reindex(
+    remote: Annotated[
+        bool,
+        typer.Option("--remote", help="Rebuild the remote job index instead of local manifests."),
+    ] = False,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help=(
+                "Remote archive destination URI. Required when QMB_REMOTE_ARCHIVE_URI "
+                "and ~/.qmb/config.toml are unset. Only used with --remote."
+            ),
+        ),
+    ] = None,
     output_format: Annotated[
         str,
         typer.Option("--format", help="Output format: text or json"),
@@ -1272,11 +1286,39 @@ def jobs_reindex(
     Useful after upgrading from a pre-manifest qmb version or after manually
     editing/removing job directories. Reads every job, regroups by session,
     and writes ``~/.qmb/jobs/sessions/<session_id>.json`` for each session.
-    """
-    from qmb.jobs.store import JobStore
 
+    With ``--remote``, rebuilds the remote ``index.json`` instead by scanning
+    every job archived at the remote destination. Use this to backfill the
+    index for jobs exported before the index existed, or to repair it after
+    a failed incremental update.
+    """
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("Invalid format. Use text or json.")
+
+    if remote:
+        from qmb.config import remote_archive_uri
+        from qmb.jobs.remote import RemoteArchiveError, get_remote_archive
+
+        try:
+            resolved_destination = remote_archive_uri(destination)
+            if resolved_destination is None:
+                raise typer.BadParameter(
+                    "Remote archive destination is not configured. Set --destination, "
+                    "QMB_REMOTE_ARCHIVE_URI, or [remote_archive].uri in ~/.qmb/config.toml."
+                )
+            archive = get_remote_archive(resolved_destination)
+            index = archive.build_index()
+            archive.write_index(index)
+        except RemoteArchiveError as e:
+            raise typer.BadParameter(str(e)) from e
+        count = len(index["jobs"])
+        if output_format == "json":
+            typer.echo(json.dumps({"jobs_indexed": count}, indent=2))
+            return
+        typer.echo(f"Indexed {count} remote job(s) at {resolved_destination}.")
+        return
+
+    from qmb.jobs.store import JobStore
 
     store = JobStore()
     count = store.reindex()
@@ -1319,6 +1361,8 @@ def _print_remote_archive_results(
     for result in results:
         uri = f" {result['uri']}" if result.get("uri") else ""
         typer.echo(f"{verb} {result['qmb_job_id']} status:{result['status']}{uri}")
+        if result.get("warning"):
+            typer.echo(f"warning: {result['warning']}", err=True)
 
 
 def _try_import_remote_session(session_id: str, store: Any, *, destination: str | None) -> None:
@@ -1373,6 +1417,49 @@ def _load_job_or_exit(job_id: str, *, destination: str | None = None):
             raise typer.BadParameter(str(imported_error)) from imported_error
     except AmbiguousJobIdError as e:
         raise typer.BadParameter(str(e)) from e
+
+
+@app.command()
+def web(
+    host: Annotated[
+        str | None,
+        typer.Option("--host", help="Bind host (default from config, fallback 127.0.0.1)."),
+    ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option("--port", help="Bind port (default from config, fallback 8850)."),
+    ] = None,
+    no_open: Annotated[
+        bool,
+        typer.Option("--no-open", help="Don't open a browser tab automatically."),
+    ] = False,
+    destination: Annotated[
+        str | None,
+        typer.Option(
+            "--destination",
+            help=(
+                "Remote archive URI to include in the job index. Defaults to "
+                "QMB_REMOTE_ARCHIVE_URI or ~/.qmb/config.toml; remote data is "
+                "omitted entirely when unset."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Serve the local-only qmb web UI and read-only JSON API.
+
+    Binds a stdlib-only HTTP server (no new dependencies) and serves a JSON
+    API over local (and optionally remote) archived qmb jobs/sessions, plus
+    the static frontend once it exists. Runs until interrupted with Ctrl-C.
+    """
+    from qmb.config import remote_archive_uri, web_host, web_port
+    from qmb.web.server import serve
+
+    serve(
+        host=web_host(host),
+        port=web_port(port),
+        remote_destination=remote_archive_uri(destination),
+        open_browser=not no_open,
+    )
 
 
 @app.command()
