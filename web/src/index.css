@@ -1,19 +1,181 @@
+/* ---------------------------------------------------------------------- */
+/* Catppuccin theme tokens                                                */
+/*                                                                        */
+/* Palettes are the official Catppuccin hex values (catppuccin.com).      */
+/* Light default = Latte, dark = Mocha (via prefers-color-scheme).        */
+/* [data-theme="latte"|"mocha"] on the root element forces a choice       */
+/* regardless of system preference (set by the in-app theme toggle).      */
+/* Semantic tokens (--bg, --text, --accent, ...) are derived from the     */
+/* raw --ctp-* palette so component CSS never references palette names    */
+/* directly.                                                              */
+/* ---------------------------------------------------------------------- */
+
 :root {
-  color-scheme: dark;
-  --bg: #14161a;
-  --bg-raised: #1b1e24;
-  --bg-hover: #22262e;
-  --bg-selected: #26314a;
-  --border: #2a2e37;
-  --text: #d7dae0;
-  --text-dim: #8b909c;
-  --text-faint: #5c616c;
-  --accent: #5b9dff;
-  --accent-dim: #33517d;
-  --danger: #e0645a;
-  --danger-bg: #3a2226;
+  color-scheme: light;
+
+  /* Catppuccin Latte */
+  --ctp-rosewater: #dc8a78;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink: #ea76cb;
+  --ctp-mauve: #8839ef;
+  --ctp-red: #d20f39;
+  --ctp-maroon: #e64553;
+  --ctp-peach: #fe640b;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-teal: #179299;
+  --ctp-sky: #04a5e5;
+  --ctp-sapphire: #209fb5;
+  --ctp-blue: #1e66f5;
+  --ctp-lavender: #7287fd;
+  --ctp-text: #4c4f69;
+  --ctp-subtext1: #5c5f77;
+  --ctp-subtext0: #6c6f85;
+  --ctp-overlay2: #7c7f93;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-surface2: #acb0be;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface0: #ccd0da;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+
   --mono: "SF Mono", ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    /* Catppuccin Mocha */
+    --ctp-rosewater: #f5e0dc;
+    --ctp-flamingo: #f2cdcd;
+    --ctp-pink: #f5c2e7;
+    --ctp-mauve: #cba6f7;
+    --ctp-red: #f38ba8;
+    --ctp-maroon: #eba0ac;
+    --ctp-peach: #fab387;
+    --ctp-yellow: #f9e2af;
+    --ctp-green: #a6e3a1;
+    --ctp-teal: #94e2d5;
+    --ctp-sky: #89dceb;
+    --ctp-sapphire: #74c7ec;
+    --ctp-blue: #89b4fa;
+    --ctp-lavender: #b4befe;
+    --ctp-text: #cdd6f4;
+    --ctp-subtext1: #bac2de;
+    --ctp-subtext0: #a6adc8;
+    --ctp-overlay2: #9399b2;
+    --ctp-overlay1: #7f849c;
+    --ctp-overlay0: #6c7086;
+    --ctp-surface2: #585b70;
+    --ctp-surface1: #45475a;
+    --ctp-surface0: #313244;
+    --ctp-base: #1e1e2e;
+    --ctp-mantle: #181825;
+    --ctp-crust: #11111b;
+  }
+}
+
+/* Explicit theme overrides — win over prefers-color-scheme in both
+   directions because they're declared after the @media block above and
+   share the same selector specificity as :root on the <html> element. */
+
+[data-theme="latte"] {
+  color-scheme: light;
+  --ctp-rosewater: #dc8a78;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink: #ea76cb;
+  --ctp-mauve: #8839ef;
+  --ctp-red: #d20f39;
+  --ctp-maroon: #e64553;
+  --ctp-peach: #fe640b;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-teal: #179299;
+  --ctp-sky: #04a5e5;
+  --ctp-sapphire: #209fb5;
+  --ctp-blue: #1e66f5;
+  --ctp-lavender: #7287fd;
+  --ctp-text: #4c4f69;
+  --ctp-subtext1: #5c5f77;
+  --ctp-subtext0: #6c6f85;
+  --ctp-overlay2: #7c7f93;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-surface2: #acb0be;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface0: #ccd0da;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+}
+
+[data-theme="mocha"] {
+  color-scheme: dark;
+  --ctp-rosewater: #f5e0dc;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink: #f5c2e7;
+  --ctp-mauve: #cba6f7;
+  --ctp-red: #f38ba8;
+  --ctp-maroon: #eba0ac;
+  --ctp-peach: #fab387;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-sapphire: #74c7ec;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext1: #bac2de;
+  --ctp-subtext0: #a6adc8;
+  --ctp-overlay2: #9399b2;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay0: #6c7086;
+  --ctp-surface2: #585b70;
+  --ctp-surface1: #45475a;
+  --ctp-surface0: #313244;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+}
+
+/* Semantic tokens, derived from the palette above. Component CSS should
+   only ever reference these, never --ctp-* directly. */
+:root {
+  --bg: var(--ctp-base);
+  --bg-raised: var(--ctp-mantle);
+  --bg-hover: var(--ctp-surface0);
+  --bg-selected: color-mix(in srgb, var(--ctp-blue) 18%, var(--ctp-mantle));
+  --border: var(--ctp-surface1);
+  --text: var(--ctp-text);
+  --text-dim: var(--ctp-subtext0);
+  --text-faint: var(--ctp-overlay1);
+  --accent: var(--ctp-blue);
+  --accent-dim: color-mix(in srgb, var(--ctp-blue) 35%, var(--ctp-surface0));
+  --danger: var(--ctp-red);
+  --danger-bg: color-mix(in srgb, var(--ctp-red) 14%, var(--bg));
+
+  --badge-local: var(--ctp-green);
+  --badge-local-border: color-mix(in srgb, var(--ctp-green) 45%, var(--border));
+  --badge-remote: var(--ctp-yellow);
+  --badge-remote-border: color-mix(in srgb, var(--ctp-yellow) 45%, var(--border));
+  --badge-both: var(--ctp-blue);
+  --badge-both-border: var(--accent-dim);
+  --badge-derived: var(--ctp-peach);
+  --badge-derived-border: color-mix(in srgb, var(--ctp-peach) 45%, var(--border));
+
+  --notice-border: color-mix(in srgb, var(--ctp-yellow) 55%, transparent);
+
+  --sql-keyword: var(--ctp-mauve);
+  --sql-string: var(--ctp-green);
+  --sql-number: var(--ctp-peach);
+  --sql-comment: var(--ctp-overlay1);
+  --sql-identifier: var(--ctp-teal);
+  --sql-punctuation: var(--ctp-subtext0);
 }
 
 * {
@@ -85,7 +247,8 @@ a {
   border-color: var(--accent);
 }
 
-.refresh-btn {
+.refresh-btn,
+.theme-toggle {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -93,13 +256,21 @@ a {
   cursor: pointer;
 }
 
-.refresh-btn:hover:not(:disabled) {
+.refresh-btn:hover:not(:disabled),
+.theme-toggle:hover {
   background: var(--bg-hover);
 }
 
 .refresh-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.theme-toggle {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .tabs {
@@ -214,23 +385,23 @@ a {
 }
 
 .badge--local {
-  color: #8fd19e;
-  border-color: #33553d;
+  color: var(--badge-local);
+  border-color: var(--badge-local-border);
 }
 
 .badge--remote {
-  color: #e0b45c;
-  border-color: #5c4b2c;
+  color: var(--badge-remote);
+  border-color: var(--badge-remote-border);
 }
 
 .badge--both {
-  color: var(--accent);
-  border-color: var(--accent-dim);
+  color: var(--badge-both);
+  border-color: var(--badge-both-border);
 }
 
 .badge--derived {
-  color: #e0b45c;
-  border-color: #5c4b2c;
+  color: var(--badge-derived);
+  border-color: var(--badge-derived-border);
   border-style: dashed;
 }
 
@@ -274,7 +445,7 @@ a {
 
 .notice {
   background: var(--bg-raised);
-  border: 1px dashed #5c4b2c;
+  border: 1px dashed var(--notice-border);
   color: var(--text-dim);
   border-radius: 6px;
   padding: 10px 12px;
@@ -373,29 +544,29 @@ a {
 }
 
 .sql-tok--keyword {
-  color: #c792ea;
+  color: var(--sql-keyword);
   font-weight: 600;
 }
 
 .sql-tok--string {
-  color: #a3d68a;
+  color: var(--sql-string);
 }
 
 .sql-tok--number {
-  color: #e0b45c;
+  color: var(--sql-number);
 }
 
 .sql-tok--comment {
-  color: var(--text-faint);
+  color: var(--sql-comment);
   font-style: italic;
 }
 
 .sql-tok--identifier {
-  color: var(--text);
+  color: var(--sql-identifier);
 }
 
 .sql-tok--punctuation {
-  color: var(--text-dim);
+  color: var(--sql-punctuation);
 }
 
 /* Copy lines */

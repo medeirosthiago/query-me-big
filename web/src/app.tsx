@@ -12,7 +12,35 @@ const MAX_RENDERED_ROWS = 200;
 type Tab = "jobs" | "sessions";
 type Selected = { type: "job"; id: string } | { type: "session"; id: string } | null;
 
+type Theme = "auto" | "latte" | "mocha";
+const THEME_KEY = "qmb-theme";
+const THEME_CYCLE: Theme[] = ["auto", "latte", "mocha"];
+const THEME_LABEL: Record<Theme, string> = { auto: "Auto", latte: "Latte", mocha: "Mocha" };
+
+function useTheme() {
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem(THEME_KEY);
+    return stored === "latte" || stored === "mocha" ? stored : "auto";
+  });
+
+  useEffect(() => {
+    if (theme === "auto") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  function cycle() {
+    setTheme((t) => THEME_CYCLE[(THEME_CYCLE.indexOf(t) + 1) % THEME_CYCLE.length]);
+  }
+
+  return { theme, cycle };
+}
+
 export function App() {
+  const { theme, cycle: cycleTheme } = useTheme();
   const [index, setIndex] = useState<IndexResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -148,6 +176,14 @@ export function App() {
           />
           <button type="button" class="refresh-btn" onClick={() => load(true)} disabled={refreshing}>
             {refreshing ? "…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            class="theme-toggle"
+            onClick={cycleTheme}
+            title="Cycle theme (auto → latte → mocha)"
+          >
+            {THEME_LABEL[theme]}
           </button>
         </div>
 
