@@ -176,13 +176,17 @@
   --danger-bg: color-mix(in srgb, var(--ctp-red) 14%, var(--bg));
 
   --badge-local: var(--ctp-green);
-  --badge-local-border: color-mix(in srgb, var(--ctp-green) 45%, var(--border));
-  --badge-remote: var(--ctp-yellow);
-  --badge-remote-border: color-mix(in srgb, var(--ctp-yellow) 45%, var(--border));
+  --badge-local-bg: color-mix(in srgb, var(--ctp-green) 18%, var(--bg));
+  --badge-local-border: color-mix(in srgb, var(--ctp-green) 50%, var(--border));
+  --badge-remote: var(--ctp-peach);
+  --badge-remote-bg: color-mix(in srgb, var(--ctp-peach) 18%, var(--bg));
+  --badge-remote-border: color-mix(in srgb, var(--ctp-peach) 50%, var(--border));
   --badge-both: var(--ctp-blue);
-  --badge-both-border: var(--accent-dim);
-  --badge-derived: var(--ctp-peach);
-  --badge-derived-border: color-mix(in srgb, var(--ctp-peach) 45%, var(--border));
+  --badge-both-bg: color-mix(in srgb, var(--ctp-blue) 18%, var(--bg));
+  --badge-both-border: color-mix(in srgb, var(--ctp-blue) 50%, var(--border));
+  --badge-derived: var(--ctp-yellow);
+  --badge-derived-bg: color-mix(in srgb, var(--ctp-yellow) 18%, var(--bg));
+  --badge-derived-border: color-mix(in srgb, var(--ctp-yellow) 50%, var(--border));
 
   --notice-border: color-mix(in srgb, var(--ctp-yellow) 55%, transparent);
 
@@ -370,11 +374,12 @@ a {
 .row__top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
 }
 
 .row__id {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text);
@@ -412,38 +417,61 @@ a {
   font-size: 11px;
 }
 
+.list-footer__remote-status {
+  font-style: italic;
+}
+
 /* Badges */
 
 .badge {
+  display: inline-block;
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: 10px;
   border: 1px solid var(--border);
+  background: var(--bg-raised);
   color: var(--text-dim);
   flex: none;
+  white-space: nowrap;
 }
 
 .badge--local {
   color: var(--badge-local);
+  background: var(--badge-local-bg);
   border-color: var(--badge-local-border);
 }
 
 .badge--remote {
   color: var(--badge-remote);
+  background: var(--badge-remote-bg);
   border-color: var(--badge-remote-border);
 }
 
 .badge--both {
   color: var(--badge-both);
+  background: var(--badge-both-bg);
   border-color: var(--badge-both-border);
 }
 
 .badge--derived {
   color: var(--badge-derived);
+  background: var(--badge-derived-bg);
   border-color: var(--badge-derived-border);
-  border-style: dashed;
+}
+
+/* Fixed-gap badge group, always right-aligned against a truncating title —
+   grouping badges into one flex item keeps their spacing constant whether
+   a row has one badge or two, instead of `justify-content: space-between`
+   redistributing space between each individual badge. */
+.row__badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
 }
 
 /* Right pane */
@@ -521,11 +549,24 @@ a {
 }
 
 .detail__header h2 {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 16px;
   font-weight: 600;
   margin: 0;
   word-break: break-all;
+}
+
+.detail__header .row__badges {
+  margin-left: 0;
+}
+
+.subtle-note {
+  margin-bottom: 16px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-style: italic;
 }
 
 .detail__grid {

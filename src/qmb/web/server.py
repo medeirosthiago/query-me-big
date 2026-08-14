@@ -49,21 +49,43 @@ class _ApiError(Exception):
 
 
 class JobIndexCache:
-    """Assembles and caches the local + remote job/session index in memory."""
+    """Assembles and caches the local + remote job/session index in memory.
+
+    Local and remote halves are cached (and refreshed) independently so that
+    ``scope=local`` requests never wait on — or even touch — GCS. The
+    ``scope=None`` (combined) view is assembled from whichever cached halves
+    are already available, rebuilding either as needed.
+    """
 
     def __init__(self, job_store: JobStore, *, remote_destination: str | None) -> None:
         self._store = job_store
         self._remote_destination = remote_destination
         self._lock = threading.Lock()
-        self._payload: dict[str, Any] | None = None
+        self._local_payload: dict[str, Any] | None = None
+        self._remote_payload: dict[str, Any] | None = None
         self._archive: GcsRemoteArchive | None = None
         self._preview_cache: dict[str, tuple[list[dict[str, Any]], int]] = {}
+        self._remote_session_cache: dict[str, dict[str, Any]] = {}
 
-    def get(self, *, refresh: bool = False) -> dict[str, Any]:
+    def get(self, *, scope: str | None = None, refresh: bool = False) -> dict[str, Any]:
         with self._lock:
-            if refresh or self._payload is None:
-                self._payload = self._build()
-            return self._payload
+            if scope in (None, "local") and (refresh or self._local_payload is None):
+                self._local_payload = self._build_local()
+            if scope in (None, "remote") and (refresh or self._remote_payload is None):
+                self._remote_payload = self._build_remote()
+            if scope == "local":
+                return self._local_payload
+            if scope == "remote":
+                return self._remote_payload
+            return self._combine(self._local_payload, self._remote_payload)
+
+    def session_detail(self, session_id: str, *, scope: str | None) -> dict[str, Any]:
+        if scope == "remote":
+            return self._remote_session_detail(session_id)
+        manifest = self._store.read_session_manifest(session_id)
+        if manifest is None:
+            raise _ApiError(HTTPStatus.NOT_FOUND, f"Session not found: {session_id}")
+        return {**manifest.to_dict(), "origin": "local"}
 
     def job_detail(self, job_id: str) -> dict[str, Any]:
         try:
@@ -135,6 +157,35 @@ class JobIndexCache:
             self._preview_cache[job_id] = entry
         return entry
 
+    def _remote_session_detail(self, session_id: str) -> dict[str, Any]:
+        archive = self._remote_archive_or_none()
+        if archive is None:
+            raise _ApiError(HTTPStatus.NOT_FOUND, f"Session not found: {session_id}")
+        with self._lock:
+            cached = self._remote_session_cache.get(session_id)
+        if cached is not None:
+            return cached
+
+        manifest = archive.fetch_session_manifest(session_id)
+        if manifest is not None:
+            result = {**manifest.to_dict(), "origin": "remote"}
+        else:
+            derived = self._derived_remote_session(session_id)
+            if derived is None:
+                raise _ApiError(HTTPStatus.NOT_FOUND, f"Session not found: {session_id}")
+            result = derived
+
+        with self._lock:
+            self._remote_session_cache[session_id] = result
+        return result
+
+    def _derived_remote_session(self, session_id: str) -> dict[str, Any] | None:
+        remote_payload = self.get(scope="remote")
+        for session in remote_payload.get("sessions", []):
+            if session.get("session_id") == session_id:
+                return session
+        return None
+
     def _remote_archive_or_none(self) -> GcsRemoteArchive | None:
         if self._remote_destination is None:
             return None
@@ -150,28 +201,58 @@ class JobIndexCache:
             self._archive = get_remote_archive(self._remote_destination)  # type: ignore[arg-type]
         return self._archive
 
-    def _build(self) -> dict[str, Any]:
+    def _build_local(self) -> dict[str, Any]:
+        """Build the local half: one query.sql read per job, no GCS calls."""
         local_jobs = [_local_job_entry(record) for record in self._store.list()]
         local_sessions = [manifest.to_dict() for manifest in self._store.session_manifests()]
-        payload: dict[str, Any] = {"generated_at": _utcnow_iso()}
+        return {
+            "generated_at": _utcnow_iso(),
+            "jobs": [{**job, "origin": "local"} for job in local_jobs],
+            "sessions": [{**s, "origin": "local"} for s in local_sessions],
+        }
 
+    def _build_remote(self) -> dict[str, Any]:
+        """Build the remote half from a single ``index.json`` download.
+
+        Session summaries are derived from the index job entries (grouped by
+        ``session_id``) instead of a ``sessions/`` prefix scan — no
+        agents/tasks/cwds are available from index entries, so those come
+        back empty and each derived session is tagged ``"derived": True``.
+        """
+        payload: dict[str, Any] = {"generated_at": _utcnow_iso(), "jobs": [], "sessions": []}
         if self._remote_destination is None:
-            payload["jobs"] = [{**job, "origin": "local"} for job in local_jobs]
-            payload["sessions"] = [{**s, "origin": "local"} for s in local_sessions]
             return payload
 
         try:
             archive = self._remote_archive()
             remote_jobs = archive.list_jobs()
-            remote_sessions = [manifest.to_dict() for manifest in archive.list_sessions()]
         except Exception as exc:
-            payload["jobs"] = [{**job, "origin": "local"} for job in local_jobs]
-            payload["sessions"] = [{**s, "origin": "local"} for s in local_sessions]
             payload["remote_error"] = f"{type(exc).__name__}: {exc}"
             return payload
 
-        payload["jobs"] = _merge_tagged(local_jobs, remote_jobs, key="qmb_job_id")
-        payload["sessions"] = _merge_tagged(local_sessions, remote_sessions, key="session_id")
+        payload["jobs"] = [{**job, "origin": "remote"} for job in remote_jobs]
+        payload["sessions"] = [
+            {**session, "origin": "remote"} for session in _derive_remote_sessions(remote_jobs)
+        ]
+        return payload
+
+    def _combine(self, local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
+        """Assemble the compatibility (no-scope) payload from cached halves."""
+        payload: dict[str, Any] = {"generated_at": local["generated_at"]}
+
+        if self._remote_destination is None:
+            payload["jobs"] = local["jobs"]
+            payload["sessions"] = local["sessions"]
+            return payload
+
+        if "remote_error" in remote:
+            payload["jobs"] = local["jobs"]
+            payload["sessions"] = local["sessions"]
+            payload["remote_error"] = remote["remote_error"]
+            return payload
+
+        payload["jobs"] = _merge_tagged(local["jobs"], remote["jobs"], key="qmb_job_id")
+        payload["sessions"] = _merge_tagged(local["sessions"], remote["sessions"], key="session_id")
         return payload
 
 
@@ -222,6 +303,8 @@ class QmbRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/index":
                 self._handle_index(query, include_body=include_body)
+            elif path.startswith("/api/sessions/"):
+                self._handle_session(path, query, include_body=include_body)
             elif path.startswith("/api/jobs/"):
                 self._handle_job(path, query, include_body=include_body)
             elif path.startswith("/api/"):
@@ -250,9 +333,20 @@ class QmbRequestHandler(BaseHTTPRequestHandler):
                 return
 
     def _handle_index(self, query: dict[str, list[str]], *, include_body: bool) -> None:
+        scope = _parse_scope(query)
         refresh = _first(query, "refresh") == "1"
-        payload = self.server.index_cache.get(refresh=refresh)
+        payload = self.server.index_cache.get(scope=scope, refresh=refresh)
         self._send_json(payload, status=HTTPStatus.OK, include_body=include_body)
+
+    def _handle_session(
+        self, path: str, query: dict[str, list[str]], *, include_body: bool
+    ) -> None:
+        parts = path.split("/")
+        if len(parts) != 4 or not parts[3]:
+            raise _ApiError(HTTPStatus.NOT_FOUND, "Not found")
+        scope = _parse_scope(query)
+        detail = self.server.index_cache.session_detail(parts[3], scope=scope)
+        self._send_json(detail, status=HTTPStatus.OK, include_body=include_body)
 
     def _handle_job(
         self, path: str, query: dict[str, list[str]], *, include_body: bool
@@ -366,6 +460,46 @@ def _local_job_entry(record: Any) -> dict[str, Any]:
     return {**record.to_metadata(), "query_excerpt": collapse_excerpt(query_text)}
 
 
+def _derive_remote_sessions(remote_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group remote index job entries into session summaries.
+
+    Only fields present on index entries (``created_at``, ``bytes_processed``)
+    are aggregated; ``agents``/``tasks``/``cwds`` require the full session
+    manifest blob, so they come back empty and the summary is marked
+    ``"derived": True`` to signal that to callers.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for job in remote_jobs:
+        session_id = job.get("session_id")
+        if not session_id:
+            continue
+        groups.setdefault(session_id, []).append(job)
+
+    sessions: list[dict[str, Any]] = []
+    for session_id, jobs in groups.items():
+        ordered = sorted(jobs, key=lambda j: j.get("created_at") or "")
+        bytes_total = sum(int(j.get("bytes_processed") or 0) for j in ordered)
+        latest = ordered[-1].get("created_at")
+        # Newest first, matching the sidebar/UI ordering (first/latest below stay min/max).
+        newest_first = list(reversed(ordered))
+        sessions.append(
+            {
+                "session_id": session_id,
+                "jobs": [j["qmb_job_id"] for j in newest_first],
+                "count": len(ordered),
+                "first": ordered[0].get("created_at"),
+                "latest": latest,
+                "bytes_processed": bytes_total,
+                "agents": [],
+                "tasks": [],
+                "cwds": [],
+                "updated_at": latest,
+                "derived": True,
+            }
+        )
+    return sessions
+
+
 def _merge_tagged(
     local_items: list[dict[str, Any]],
     remote_items: list[dict[str, Any]],
@@ -414,6 +548,13 @@ def _parse_positive_int(value: str | None, default: int, *, name: str) -> int:
     if parsed < 1:
         raise _ApiError(HTTPStatus.BAD_REQUEST, f"Invalid {name}: {value!r}")
     return parsed
+
+
+def _parse_scope(query: dict[str, list[str]]) -> str | None:
+    scope = _first(query, "scope")
+    if scope not in (None, "local", "remote"):
+        raise _ApiError(HTTPStatus.BAD_REQUEST, f"Invalid scope: {scope!r}")
+    return scope
 
 
 def _first(query: dict[str, list[str]], key: str) -> str | None:

@@ -182,6 +182,15 @@ class GcsRemoteArchive:
             return []
         return list(jobs.values())
 
+    def fetch_session_manifest(self, session_id: str) -> SessionManifest | None:
+        """Fetch one session's manifest blob directly (single GCS round-trip).
+
+        Returns ``None`` if the manifest is missing or corrupt — callers
+        (``qmb web``'s on-demand remote session detail) should fall back to a
+        derived summary built from ``index.json`` in that case.
+        """
+        return self._read_remote_manifest(session_id)
+
     def list_sessions(self) -> list[SessionManifest]:
         """Return every remote session manifest via a ``sessions/`` prefix scan."""
         list_prefix = f"{self._join_prefix('sessions')}/"

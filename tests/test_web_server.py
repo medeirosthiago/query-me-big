@@ -88,10 +88,14 @@ class _FakeRemoteArchive:
         self.index_sessions: list[SessionManifest] = []
         self.full_jobs: dict[str, dict[str, Any]] = {}
         self.previews: dict[str, str] = {}
+        self.session_manifests: dict[str, SessionManifest] = {}
         self.fetch_preview_calls = 0
+        self.list_jobs_calls = 0
+        self.fetch_session_manifest_calls = 0
         self.list_error: Exception | None = None
 
     def list_jobs(self) -> list[dict[str, Any]]:
+        self.list_jobs_calls += 1
         if self.list_error:
             raise self.list_error
         return self.index_jobs
@@ -113,6 +117,23 @@ class _FakeRemoteArchive:
             return self.previews[job_id]
         except KeyError:
             raise RemoteArchiveError(f"Remote qmb job not found: {job_id}") from None
+
+    def fetch_session_manifest(self, session_id: str) -> SessionManifest | None:
+        self.fetch_session_manifest_calls += 1
+        return self.session_manifests.get(session_id)
+
+
+class _AlwaysRaisingRemoteArchive:
+    """Stand-in that fails any call — proves a scope never touches it."""
+
+    def list_jobs(self) -> list[dict[str, Any]]:
+        raise AssertionError("scope=local must never call the remote archive")
+
+    def list_sessions(self) -> list[SessionManifest]:
+        raise AssertionError("scope=local must never call the remote archive")
+
+    def fetch_session_manifest(self, session_id: str) -> SessionManifest | None:
+        raise AssertionError("scope=local must never call the remote archive")
 
 
 # -- /api/index ----------------------------------------------------------
@@ -228,6 +249,266 @@ def test_api_index_remote_failure_keeps_local_data_and_sets_remote_error(
     assert len(payload["jobs"]) == 1
     assert payload["jobs"][0]["origin"] == "local"
     assert "no network" in payload["remote_error"]
+
+
+# -- /api/index?scope=... -----------------------------------------------
+
+
+def _remote_index_entry(
+    qmb_job_id: str,
+    *,
+    session_id: str | None = None,
+    created_at: str = "2024-01-01T00:00:00+00:00",
+    bytes_processed: int = 100,
+) -> dict[str, Any]:
+    return {
+        "qmb_job_id": qmb_job_id,
+        "session_id": session_id,
+        "created_at": created_at,
+        "engine": "bigquery",
+        "source_label": "ad-hoc",
+        "total_rows": 3,
+        "bytes_processed": bytes_processed,
+        "query_excerpt": "SELECT 1",
+    }
+
+
+def test_api_index_scope_local_never_touches_remote_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    record = _seed_job(store)
+    monkeypatch.setattr(
+        "qmb.jobs.remote.get_remote_archive", lambda destination: _AlwaysRaisingRemoteArchive()
+    )
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=local")
+
+    assert status == 200
+    assert "remote_error" not in payload
+    assert len(payload["jobs"]) == 1
+    assert payload["jobs"][0]["qmb_job_id"] == record.qmb_job_id
+    assert payload["jobs"][0]["origin"] == "local"
+
+
+def test_api_index_scope_remote_returns_only_remote_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    _seed_job(store)  # present locally only; scope=remote must not include it
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_remote_only")]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=remote")
+
+    assert status == 200
+    assert [job["qmb_job_id"] for job in payload["jobs"]] == ["qmb_remote_only"]
+    assert payload["jobs"][0]["origin"] == "remote"
+    assert fake.list_jobs_calls == 1
+
+
+def test_api_index_scope_remote_derives_sessions_from_index_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [
+        _remote_index_entry(
+            "qmb_a", session_id="session-x", created_at="2024-01-01T00:00:00+00:00",
+            bytes_processed=100,
+        ),
+        _remote_index_entry(
+            "qmb_b", session_id="session-x", created_at="2024-01-02T00:00:00+00:00",
+            bytes_processed=200,
+        ),
+        _remote_index_entry("qmb_c", session_id=None),  # session-less jobs are excluded
+    ]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=remote")
+
+    assert status == 200
+    assert len(payload["sessions"]) == 1
+    session = payload["sessions"][0]
+    assert session["session_id"] == "session-x"
+    assert session["jobs"] == ["qmb_b", "qmb_a"]
+    assert session["count"] == 2
+    assert session["first"] == "2024-01-01T00:00:00+00:00"
+    assert session["latest"] == "2024-01-02T00:00:00+00:00"
+    assert session["bytes_processed"] == 300
+    assert session["agents"] == []
+    assert session["tasks"] == []
+    assert session["cwds"] == []
+    assert session["derived"] is True
+    assert session["origin"] == "remote"
+    # This is the whole point: one index.json download, no manifest scan.
+    assert fake.list_jobs_calls == 1
+
+
+def test_api_index_no_scope_matches_scoped_assembly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    local_record = _seed_job(store, session_id="session-x")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_remote_only", session_id="session-y")]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        _, combined = _get_json(netloc, "/api/index")
+
+    by_id = {job["qmb_job_id"]: job for job in combined["jobs"]}
+    assert by_id[local_record.qmb_job_id]["origin"] == "local"
+    assert by_id["qmb_remote_only"]["origin"] == "remote"
+    by_session = {s["session_id"]: s for s in combined["sessions"]}
+    assert by_session["session-x"]["origin"] == "local"
+    assert by_session["session-y"]["origin"] == "remote"
+    assert by_session["session-y"]["derived"] is True
+
+
+def test_api_index_scope_local_and_remote_refresh_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    _seed_job(store)
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_remote_1")]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        _get_json(netloc, "/api/index?scope=local")
+        _get_json(netloc, "/api/index?scope=remote")
+        assert fake.list_jobs_calls == 1
+
+        # Refreshing local must not rebuild (or touch) the remote cache.
+        _seed_job(store)
+        _, local_refreshed = _get_json(netloc, "/api/index?scope=local&refresh=1")
+        assert len(local_refreshed["jobs"]) == 2
+        assert fake.list_jobs_calls == 1
+
+        # Refreshing remote must not touch local again.
+        fake.index_jobs = [_remote_index_entry("qmb_remote_1"), _remote_index_entry("qmb_remote_2")]
+        _, remote_refreshed = _get_json(netloc, "/api/index?scope=remote&refresh=1")
+        assert len(remote_refreshed["jobs"]) == 2
+        assert fake.list_jobs_calls == 2
+
+
+def test_api_index_invalid_scope_returns_400(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    with running_server(store) as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=bogus")
+
+    assert status == 400
+    assert "error" in payload
+
+
+# -- /api/sessions/{id} ----------------------------------------------------
+
+
+def test_api_session_detail_local_returns_manifest(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    _seed_job(store, session_id="session-a")
+
+    with running_server(store) as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/session-a")
+
+    assert status == 200
+    assert payload["session_id"] == "session-a"
+    assert payload["origin"] == "local"
+
+
+def test_api_session_detail_local_unknown_returns_404(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    with running_server(store) as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/does-not-exist")
+
+    assert status == 404
+    assert "error" in payload
+
+
+def test_api_session_detail_remote_fetches_manifest_and_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.session_manifests["session-x"] = SessionManifest(
+        session_id="session-x",
+        jobs=("qmb_a", "qmb_b"),
+        count=2,
+        agents=("agent-1",),
+        tasks=("do the thing",),
+        cwds=("/repo",),
+    )
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/session-x?scope=remote")
+        assert status == 200
+        assert payload["origin"] == "remote"
+        assert payload["agents"] == ["agent-1"]
+        assert payload["tasks"] == ["do the thing"]
+        assert payload["cwds"] == ["/repo"]
+        assert "derived" not in payload or payload.get("derived") is not True
+
+        _get_json(netloc, "/api/sessions/session-x?scope=remote")
+
+    assert fake.fetch_session_manifest_calls == 1, "manifest fetch should be cached per session id"
+
+
+def test_api_session_detail_remote_falls_back_to_derived_when_manifest_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_a", session_id="session-x")]
+    # No manifest registered for "session-x" -> fetch_session_manifest returns None.
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/session-x?scope=remote")
+
+    assert status == 200
+    assert payload["origin"] == "remote"
+    assert payload["derived"] is True
+    assert payload["jobs"] == ["qmb_a"]
+
+
+def test_api_session_detail_remote_unknown_returns_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    fake = _FakeRemoteArchive()
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/does-not-exist?scope=remote")
+
+    assert status == 404
+    assert "error" in payload
+
+
+def test_api_session_detail_remote_without_remote_configured_returns_404(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    with running_server(store, remote_destination=None) as netloc:
+        status, payload = _get_json(netloc, "/api/sessions/session-x?scope=remote")
+
+    assert status == 404
+    assert "error" in payload
 
 
 # -- /api/jobs/{id} --------------------------------------------------------
