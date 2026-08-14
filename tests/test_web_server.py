@@ -7,6 +7,7 @@ import http.client
 import json
 import threading
 from collections.abc import Iterator
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -433,6 +434,136 @@ def test_head_request_returns_headers_without_body(tmp_path: Path) -> None:
     assert status == 200
     assert content_length is not None and int(content_length) > 0
     assert body == b""
+
+
+# -- Client disconnects (BrokenPipeError/ConnectionResetError) ---------------
+
+
+class _RaisingWfile:
+    """Stand-in for a socket file object that raises on every ``write``."""
+
+    def __init__(self, exc: type[BaseException]) -> None:
+        self.exc = exc
+        self.write_calls = 0
+
+    def write(self, _data: bytes) -> int:
+        self.write_calls += 1
+        raise self.exc("client gone")
+
+    def flush(self) -> None:
+        pass
+
+
+class _FakeHandler(server_module.QmbRequestHandler):
+    """A handler whose I/O is faked so ``_route`` can be exercised directly."""
+
+    def __init__(self, wfile: Any) -> None:
+        self.wfile = wfile
+        self.sent_responses: list[tuple[int, ...]] = []
+
+    def send_response(self, code: int, message: str | None = None) -> None:
+        self.sent_responses.append((code,))
+
+    def send_header(self, keyword: str, value: str) -> None:
+        pass
+
+    def end_headers(self) -> None:
+        pass
+
+    def _handle_index(self, query: dict[str, list[str]], *, include_body: bool) -> None:
+        self._send_json({"ok": True}, status=HTTPStatus.OK, include_body=include_body)
+
+
+def _make_fake_request(exc: type[BaseException]) -> tuple[_FakeHandler, _RaisingWfile]:
+    wfile = _RaisingWfile(exc)
+    handler = _FakeHandler(wfile)
+    handler.path = "/api/index"
+    return handler, wfile
+
+
+@pytest.mark.parametrize("exc_type", [BrokenPipeError, ConnectionResetError])
+def test_route_swallows_disconnect_during_successful_response(
+    exc_type: type[BaseException],
+) -> None:
+    handler, wfile = _make_fake_request(exc_type)
+
+    handler._route(include_body=True)
+
+    assert wfile.write_calls == 1, "should not retry the write after the client is gone"
+    assert handler.sent_responses == [(HTTPStatus.OK,)], (
+        "should not attempt a second (error) response on the dead socket"
+    )
+
+
+def test_route_swallows_disconnect_from_generic_exception_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A BrokenPipeError raised while sending a 500 must not propagate either."""
+
+    def _boom(self: Any, query: Any, *, include_body: bool) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(_FakeHandler, "_handle_index", _boom)
+    handler, wfile = _make_fake_request(BrokenPipeError)
+
+    handler._route(include_body=True)
+
+    assert wfile.write_calls == 1
+    assert handler.sent_responses == [(HTTPStatus.INTERNAL_SERVER_ERROR,)]
+
+
+def test_route_swallows_disconnect_from_api_error_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A BrokenPipeError raised while sending a 4xx must not propagate either."""
+
+    def _not_found(self: Any, query: Any, *, include_body: bool) -> None:
+        raise server_module._ApiError(HTTPStatus.NOT_FOUND, "nope")
+
+    monkeypatch.setattr(_FakeHandler, "_handle_index", _not_found)
+    handler, wfile = _make_fake_request(BrokenPipeError)
+
+    handler._route(include_body=True)
+
+    assert wfile.write_calls == 1
+    assert handler.sent_responses == [(HTTPStatus.NOT_FOUND,)]
+
+
+def test_handle_error_is_quiet_for_broken_pipe(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    srv = create_server("127.0.0.1", 0, job_store=store, remote_destination=None)
+    try:
+        try:
+            raise BrokenPipeError("gone")
+        except BrokenPipeError:
+            srv.handle_error(None, ("127.0.0.1", 12345))
+    finally:
+        srv.server_close()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_handle_error_still_reports_other_exceptions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    srv = create_server("127.0.0.1", 0, job_store=store, remote_destination=None)
+    try:
+        try:
+            raise ValueError("something else went wrong")
+        except ValueError:
+            srv.handle_error(None, ("127.0.0.1", 12345))
+    finally:
+        srv.server_close()
+
+    captured = capsys.readouterr()
+    assert "something else went wrong" in captured.err or "something else went wrong" in (
+        captured.out
+    )
 
 
 # -- Config precedence -------------------------------------------------------

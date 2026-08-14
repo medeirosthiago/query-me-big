@@ -170,7 +170,26 @@ export function App() {
   const visibleCount = tab === "jobs" ? visibleJobs.length : visibleSessions.length;
   const totalCount = tab === "jobs" ? filteredJobs.length : filteredSessions.length;
 
-  useEffect(() => setCursor(0), [query, tab]);
+  // Resync the cursor whenever the query or tab changes: if the currently
+  // selected item is still visible in the (possibly re-filtered) list, keep
+  // the cursor on it; otherwise fall back to the top. This runs after the
+  // click handlers below re-render with the new list, so it correctly picks
+  // up cases where a click changes both the query and the tab at once (see
+  // `openJobFromSession`).
+  useEffect(() => {
+    if (tab === "jobs" && selected?.type === "job") {
+      const i = visibleJobs.findIndex((j) => j.qmb_job_id === selected.id);
+      setCursor(i >= 0 ? i : 0);
+      return;
+    }
+    if (tab === "sessions" && selected?.type === "session") {
+      const i = visibleSessions.findIndex((s) => s.session_id === selected.id);
+      setCursor(i >= 0 ? i : 0);
+      return;
+    }
+    setCursor(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, tab]);
 
   function openJob(id: string) {
     setSelected({ type: "job", id });
@@ -184,6 +203,18 @@ export function App() {
     setTab("sessions");
     const i = visibleSessions.findIndex((s) => s.session_id === id);
     if (i >= 0) setCursor(i);
+  }
+
+  /**
+   * Clicking a job inside a session's job list: scope the Jobs tab to that
+   * session via a `session:<id>` search token (instead of showing every
+   * job), then select the clicked job. The token is the only filter state —
+   * erasing it from the search bar restores the full jobs list.
+   */
+  function openJobFromSession(id: string, sessionId: string) {
+    setSelected({ type: "job", id });
+    setTab("jobs");
+    setQuery(`session:${sessionId} `);
   }
 
   useEffect(() => {
@@ -370,7 +401,11 @@ export function App() {
           (() => {
             const session = allSessions.find((s) => s.session_id === selected.id);
             return session ? (
-              <SessionDetail session={session} jobs={sessionJobs} onSelectJob={openJob} />
+              <SessionDetail
+                session={session}
+                jobs={sessionJobs}
+                onSelectJob={(jobId) => openJobFromSession(jobId, session.session_id)}
+              />
             ) : (
               <div class="pane-error">Session not found: {selected.id}</div>
             );

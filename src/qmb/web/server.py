@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import mimetypes
+import sys
 import threading
 import urllib.parse
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 DEFAULT_PAGE_SIZE = 200
+_QUIET_ERRORS = (BrokenPipeError, ConnectionResetError)
 
 PLACEHOLDER_HTML = """<!doctype html>
 <html lang="en">
@@ -192,6 +194,12 @@ class QmbHTTPServer(ThreadingHTTPServer):
         self.remote_destination = remote_destination
         self.index_cache = JobIndexCache(job_store, remote_destination=remote_destination)
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc_type = sys.exc_info()[0]
+        if exc_type is not None and issubclass(exc_type, _QUIET_ERRORS):
+            return
+        super().handle_error(request, client_address)
+
 
 class QmbRequestHandler(BaseHTTPRequestHandler):
     """Routes GET/HEAD requests to the JSON API or static file serving."""
@@ -220,14 +228,26 @@ class QmbRequestHandler(BaseHTTPRequestHandler):
                 raise _ApiError(HTTPStatus.NOT_FOUND, "Not found")
             else:
                 self._handle_static(path, include_body=include_body)
+        except _QUIET_ERRORS:
+            # The client disconnected (tab closed/refreshed) mid-response. Nothing
+            # to send, nothing worth logging: this is routine browser behavior.
+            return
         except _ApiError as exc:
-            self._send_json({"error": exc.message}, status=exc.status, include_body=include_body)
+            try:
+                self._send_json(
+                    {"error": exc.message}, status=exc.status, include_body=include_body
+                )
+            except _QUIET_ERRORS:
+                return
         except Exception as exc:  # pragma: no cover - defensive catch-all
-            self._send_json(
-                {"error": str(exc)},
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
-                include_body=include_body,
-            )
+            try:
+                self._send_json(
+                    {"error": str(exc)},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    include_body=include_body,
+                )
+            except _QUIET_ERRORS:
+                return
 
     def _handle_index(self, query: dict[str, list[str]], *, include_body: bool) -> None:
         refresh = _first(query, "refresh") == "1"
