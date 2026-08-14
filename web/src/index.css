@@ -242,13 +242,14 @@ a {
 
 .toolbar {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 10px;
   border-bottom: 1px solid var(--border);
 }
 
 .search-input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -265,15 +266,23 @@ a {
 
 .refresh-btn,
 .theme-toggle {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
   cursor: pointer;
+  color: var(--text-dim);
 }
 
 .refresh-btn:hover:not(:disabled),
 .theme-toggle:hover {
+  color: var(--text);
   background: var(--bg-hover);
 }
 
@@ -282,18 +291,22 @@ a {
   cursor: default;
 }
 
-.theme-toggle {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
+.refresh-btn svg,
 .theme-toggle svg {
   flex: none;
+}
+
+.refresh-icon--spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tabs {
@@ -554,16 +567,48 @@ a {
 
 /* SQL view */
 
+.sql-view-wrap {
+  position: relative;
+  margin: 0 0 20px;
+}
+
 .sql-view {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px 14px;
-  margin: 0 0 20px;
+  margin: 0;
   overflow-x: auto;
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.sql-view__copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.sql-view-wrap:hover .sql-view__copy-btn,
+.sql-view__copy-btn:hover,
+.sql-view__copy-btn:focus-visible {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .sql-tok--keyword {
@@ -615,15 +660,21 @@ a {
 
 .copy-line__btn {
   flex: none;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
   border-radius: 4px;
-  padding: 2px 8px;
+  padding: 0;
   cursor: pointer;
-  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .copy-line__btn:hover {
+  color: var(--text);
   background: var(--bg-hover);
 }
 
