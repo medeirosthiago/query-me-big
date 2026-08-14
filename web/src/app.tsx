@@ -14,7 +14,6 @@ type Selected = { type: "job"; id: string } | { type: "session"; id: string } | 
 
 type Theme = "auto" | "latte" | "mocha";
 const THEME_KEY = "qmb-theme";
-const THEME_LABEL: Record<Theme, string> = { auto: "Auto", latte: "Latte", mocha: "Mocha" };
 
 function ThemeIcon({ theme }: { theme: Theme }) {
   const common = {
@@ -50,6 +49,26 @@ function ThemeIcon({ theme }: { theme: Theme }) {
     <svg {...common}>
       <circle cx="7" cy="7" r="5.4" />
       <path d="M7 1.6a5.4 5.4 0 0 1 0 10.8Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function RefreshIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width={1.3}
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden={true}
+      class={spinning ? "refresh-icon--spinning" : ""}
+    >
+      <path d="M11.8 7A4.8 4.8 0 1 1 10.3 3.6" />
+      <path d="M11.8 2.6v3.2h-3.2" />
     </svg>
   );
 }
@@ -280,17 +299,24 @@ export function App() {
             value={query}
             onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
           />
-          <button type="button" class="refresh-btn" onClick={() => load(true)} disabled={refreshing}>
-            {refreshing ? "…" : "Refresh"}
+          <button
+            type="button"
+            class="refresh-btn"
+            title="Refresh"
+            aria-label="Refresh"
+            onClick={() => load(true)}
+            disabled={refreshing}
+          >
+            <RefreshIcon spinning={refreshing} />
           </button>
           <button
             type="button"
             class="theme-toggle"
             title={`Theme: ${theme} - click to toggle light/dark, press and hold for auto (system)`}
+            aria-label={`Theme: ${theme} - click to toggle light/dark, press and hold for auto (system)`}
             {...holdToggle}
           >
             <ThemeIcon theme={theme} />
-            <span>{THEME_LABEL[theme]}</span>
           </button>
         </div>
 
