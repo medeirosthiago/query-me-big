@@ -637,6 +637,38 @@ uri = "gs://your-bucket/qmb/"
 preview_rows = 500
 ```
 
+#### Onboarding a teammate to a shared archive
+
+A fresh machine needs exactly three things to browse, import, and publish to a
+team's shared archive:
+
+1. **Install qmb** (the web UI ships prebuilt — no Node required):
+
+   ```bash
+   uv tool install git+https://github.com/medeirosthiago/query-me-big.git
+   ```
+
+2. **Authenticate with Google** (qmb uses Application Default Credentials):
+
+   ```bash
+   gcloud auth application-default login
+   ```
+
+   The account needs `Storage Object Viewer` on the archive bucket to browse
+   and import, plus `Storage Object Creator` to export/publish jobs.
+
+3. **Point at the shared bucket** in `~/.qmb/config.toml`:
+
+   ```toml
+   [remote_archive]
+   uri = "gs://your-bucket/qmb/"
+   ```
+
+Then `qmb web` merges local and remote jobs/sessions (tagged
+`local`/`remote`/`both`), `qmb jobs import <id>` pulls anything down, and
+`qmb run --publish` shares new jobs with the team — the remote index updates
+automatically on every export.
+
 Publish while running a query:
 
 ```bash
