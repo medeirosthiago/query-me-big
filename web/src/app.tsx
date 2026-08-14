@@ -14,7 +14,6 @@ type Selected = { type: "job"; id: string } | { type: "session"; id: string } | 
 
 type Theme = "auto" | "latte" | "mocha";
 const THEME_KEY = "qmb-theme";
-const THEME_CYCLE: Theme[] = ["auto", "latte", "mocha"];
 const THEME_LABEL: Record<Theme, string> = { auto: "Auto", latte: "Latte", mocha: "Mocha" };
 
 function ThemeIcon({ theme }: { theme: Theme }) {
@@ -55,6 +54,12 @@ function ThemeIcon({ theme }: { theme: Theme }) {
   );
 }
 
+const HOLD_MS = 600;
+
+function systemPrefersDark() {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+
 function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem(THEME_KEY);
@@ -64,21 +69,84 @@ function useTheme() {
   useEffect(() => {
     if (theme === "auto") {
       document.documentElement.removeAttribute("data-theme");
+      localStorage.removeItem(THEME_KEY);
     } else {
       document.documentElement.setAttribute("data-theme", theme);
+      localStorage.setItem(THEME_KEY, theme);
     }
-    localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  function cycle() {
-    setTheme((t) => THEME_CYCLE[(THEME_CYCLE.indexOf(t) + 1) % THEME_CYCLE.length]);
+  // A click always toggles between the two explicit themes. From "auto" it
+  // picks the opposite of whatever is currently in effect, so the click
+  // always visibly changes the theme instead of just "locking in" the
+  // current appearance.
+  function toggle() {
+    setTheme((t) => {
+      if (t === "auto") return systemPrefersDark() ? "latte" : "mocha";
+      return t === "latte" ? "mocha" : "latte";
+    });
   }
 
-  return { theme, cycle };
+  function setAuto() {
+    setTheme("auto");
+  }
+
+  return { theme, toggle, setAuto };
+}
+
+function useHoldToggle(onClick: () => void, onHold: () => void, holdMs = HOLD_MS) {
+  const timerRef = useRef<number | null>(null);
+  const heldRef = useRef(false);
+
+  function clearTimer() {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function onPointerDown() {
+    heldRef.current = false;
+    clearTimer();
+    timerRef.current = window.setTimeout(() => {
+      heldRef.current = true;
+      timerRef.current = null;
+      onHold();
+    }, holdMs);
+  }
+
+  function onPointerUp() {
+    clearTimer();
+  }
+
+  function onPointerLeave() {
+    clearTimer();
+  }
+
+  function onClickHandler(e: MouseEvent) {
+    if (heldRef.current) {
+      // Suppress the synthetic click that follows a completed hold so it
+      // doesn't immediately toggle away from auto.
+      e.preventDefault();
+      e.stopPropagation();
+      heldRef.current = false;
+      return;
+    }
+    onClick();
+  }
+
+  return {
+    onPointerDown,
+    onPointerUp,
+    onPointerLeave,
+    onPointerCancel: onPointerUp,
+    onClick: onClickHandler,
+  };
 }
 
 export function App() {
-  const { theme, cycle: cycleTheme } = useTheme();
+  const { theme, toggle: toggleTheme, setAuto } = useTheme();
+  const holdToggle = useHoldToggle(toggleTheme, setAuto);
   const [index, setIndex] = useState<IndexResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -218,8 +286,8 @@ export function App() {
           <button
             type="button"
             class="theme-toggle"
-            onClick={cycleTheme}
-            title={`Theme: ${theme} (click to switch)`}
+            title={`Theme: ${theme} - click to toggle light/dark, press and hold for auto (system)`}
+            {...holdToggle}
           >
             <ThemeIcon theme={theme} />
             <span>{THEME_LABEL[theme]}</span>
