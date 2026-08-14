@@ -9,6 +9,10 @@ behavior changes are called out explicitly).
 
 ## [Unreleased]
 
+_No released changes yet._
+
+## [0.7.0] - 2026-08-14
+
 ### Added
 
 - `qmb web` — serve a local, read-only web UI and JSON API over archived qmb
