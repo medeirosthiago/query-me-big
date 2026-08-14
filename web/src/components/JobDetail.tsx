@@ -170,13 +170,6 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
         )}
       </section>
 
-      <section class="detail__section">
-        <h3>Reproduce</h3>
-        <CopyLine command={`qmb jobs sql ${detail.qmb_job_id}`} />
-        <CopyLine command={`qmb jobs open ${detail.qmb_job_id}`} />
-        {origin === "remote" && <CopyLine command={`qmb jobs import ${detail.qmb_job_id}`} />}
-      </section>
-
       {detail.schema.length > 0 && (
         <section class="detail__section">
           <h3>Schema</h3>
@@ -196,6 +189,13 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
           </table>
         </section>
       )}
+
+      <section class="detail__section">
+        <h3>Reproduce</h3>
+        <CopyLine command={`qmb jobs sql ${detail.qmb_job_id}`} />
+        <CopyLine command={`qmb jobs open ${detail.qmb_job_id}`} />
+        {origin === "remote" && <CopyLine command={`qmb jobs import ${detail.qmb_job_id}`} />}
+      </section>
     </div>
   );
 }

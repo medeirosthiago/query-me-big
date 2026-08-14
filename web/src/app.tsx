@@ -17,6 +17,44 @@ const THEME_KEY = "qmb-theme";
 const THEME_CYCLE: Theme[] = ["auto", "latte", "mocha"];
 const THEME_LABEL: Record<Theme, string> = { auto: "Auto", latte: "Latte", mocha: "Mocha" };
 
+function ThemeIcon({ theme }: { theme: Theme }) {
+  const common = {
+    width: 14,
+    height: 14,
+    viewBox: "0 0 14 14",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": 1.3,
+    "stroke-linecap": "round" as const,
+    "stroke-linejoin": "round" as const,
+    "aria-hidden": true,
+  };
+  if (theme === "latte") {
+    // sun
+    return (
+      <svg {...common}>
+        <circle cx="7" cy="7" r="2.6" />
+        <path d="M7 0.8v1.6M7 11.6v1.6M0.8 7h1.6M11.6 7h1.6M2.5 2.5l1.1 1.1M10.4 10.4l1.1 1.1M11.5 2.5l-1.1 1.1M3.6 10.4l-1.1 1.1" />
+      </svg>
+    );
+  }
+  if (theme === "mocha") {
+    // moon
+    return (
+      <svg {...common}>
+        <path d="M9.6 1.6a5.6 5.6 0 1 0 2.8 8.7A5.9 5.9 0 0 1 9.6 1.6Z" />
+      </svg>
+    );
+  }
+  // auto: half-filled circle
+  return (
+    <svg {...common}>
+      <circle cx="7" cy="7" r="5.4" />
+      <path d="M7 1.6a5.4 5.4 0 0 1 0 10.8Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem(THEME_KEY);
@@ -181,9 +219,10 @@ export function App() {
             type="button"
             class="theme-toggle"
             onClick={cycleTheme}
-            title="Cycle theme (auto → latte → mocha)"
+            title={`Theme: ${theme} (click to switch)`}
           >
-            {THEME_LABEL[theme]}
+            <ThemeIcon theme={theme} />
+            <span>{THEME_LABEL[theme]}</span>
           </button>
         </div>
 
