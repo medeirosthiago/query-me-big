@@ -19,7 +19,7 @@ export function CopyLine({ command }: { command: string }) {
       <code>{command}</code>
       <button
         type="button"
-        class="copy-line__btn"
+        class="icon-btn copy-line__btn"
         aria-label="Copy"
         title="Copy"
         onClick={copy}
