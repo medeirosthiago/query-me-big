@@ -2,6 +2,22 @@ import { bestScore, normalize } from "./fuzzy";
 import { fmtDate } from "./format";
 import type { JobSummary, SessionSummary } from "./types";
 
+const SESSION_TOKEN_RE = /session:(\S+)/i;
+
+/**
+ * Pulls a `session:<id>` token out of a raw query (before fuzzy-normalization
+ * mangles the `:`), returning the exact session id to hard-filter on and the
+ * remaining free text to fuzzy-match. No token -> `sessionId` is null and
+ * `rest` is the query unchanged.
+ */
+export function extractSessionToken(query: string): { sessionId: string | null; rest: string } {
+  const match = SESSION_TOKEN_RE.exec(query);
+  if (!match) return { sessionId: null, rest: query };
+  const sessionId = match[1].trim();
+  const rest = query.slice(0, match.index) + query.slice(match.index + match[0].length);
+  return { sessionId, rest };
+}
+
 function jobCandidates(job: JobSummary): (string | null | undefined)[] {
   return [
     job.query_excerpt,
@@ -25,22 +41,34 @@ function sessionCandidates(session: SessionSummary): (string | null | undefined)
   ];
 }
 
-/** Fuzzy-filter + sort jobs. Empty query -> chronological (newest first). */
+/**
+ * Fuzzy-filter + sort jobs. Empty query -> chronological (newest first).
+ * A `session:<id>` token first hard-filters to that session's jobs; any
+ * remaining text then fuzzy-matches within that subset.
+ */
 export function searchJobs(jobs: JobSummary[], query: string): JobSummary[] {
-  const normalizedQuery = normalize(query);
+  const { sessionId, rest } = extractSessionToken(query);
+  const scoped = sessionId === null ? jobs : jobs.filter((job) => job.session_id === sessionId);
+  const normalizedQuery = normalize(rest);
   if (!normalizedQuery) {
-    return [...jobs].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return [...scoped].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
-  return scoreAndSort(jobs, (job) => bestScore(normalizedQuery, jobCandidates(job)));
+  return scoreAndSort(scoped, (job) => bestScore(normalizedQuery, jobCandidates(job)));
 }
 
-/** Fuzzy-filter + sort sessions. Empty query -> most recently updated first. */
+/**
+ * Fuzzy-filter + sort sessions. Empty query -> most recently updated first.
+ * A `session:<id>` token hard-filters to that exact session id.
+ */
 export function searchSessions(sessions: SessionSummary[], query: string): SessionSummary[] {
-  const normalizedQuery = normalize(query);
+  const { sessionId, rest } = extractSessionToken(query);
+  const scoped =
+    sessionId === null ? sessions : sessions.filter((session) => session.session_id === sessionId);
+  const normalizedQuery = normalize(rest);
   if (!normalizedQuery) {
-    return [...sessions].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+    return [...scoped].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
-  return scoreAndSort(sessions, (session) => bestScore(normalizedQuery, sessionCandidates(session)));
+  return scoreAndSort(scoped, (session) => bestScore(normalizedQuery, sessionCandidates(session)));
 }
 
 function scoreAndSort<T>(items: T[], score: (item: T) => number | null): T[] {
