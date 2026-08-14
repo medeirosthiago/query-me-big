@@ -6,6 +6,7 @@ import type {
   JobSummary,
   Origin,
   PreviewResponse,
+  SessionSummary,
   SourceMetadata,
 } from "./types";
 
@@ -105,10 +106,37 @@ async function getJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function fetchIndex(options: { refresh?: boolean } = {}): Promise<IndexResponse> {
-  const url = options.refresh ? "/api/index?refresh=1" : "/api/index";
-  const raw = await getJson<RawIndexResponse>(url);
+export type IndexScope = "local" | "remote";
+
+/**
+ * Fetch one half of the index (see `src/qmb/web/server.py::JobIndexCache`).
+ * `scope=local` resolves in local-scan time (no GCS calls); `scope=remote`
+ * costs a single `index.json` download. The frontend fetches both in
+ * parallel and merges them client-side (see `mergeIndex.ts`) so the UI can
+ * render local data immediately without waiting on the remote half.
+ */
+export async function fetchIndex(
+  scope: IndexScope,
+  options: { refresh?: boolean } = {},
+): Promise<IndexResponse> {
+  const params = new URLSearchParams({ scope });
+  if (options.refresh) params.set("refresh", "1");
+  const raw = await getJson<RawIndexResponse>(`/api/index?${params}`);
   return { ...raw, jobs: raw.jobs.map(normalizeJob) };
+}
+
+/**
+ * On-demand full session detail (agents/tasks/cwds) for a remote session
+ * that was only available as a derived summary from `index.json` entries.
+ * Cached server-side per session id.
+ */
+export function fetchSessionDetail(
+  sessionId: string,
+  scope: IndexScope,
+): Promise<SessionSummary> {
+  return getJson<SessionSummary>(
+    `/api/sessions/${encodeURIComponent(sessionId)}?scope=${scope}`,
+  );
 }
 
 export function fetchJobDetail(jobId: string): Promise<JobDetail> {

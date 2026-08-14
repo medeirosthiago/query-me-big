@@ -24,19 +24,19 @@ export function deriveMissingSessions(
 }
 
 function deriveSession(sessionId: string, jobs: JobSummary[]): SessionSummary {
-  const sorted = [...jobs].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const sorted = [...jobs].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const bytesProcessed = sorted.reduce((sum, job) => sum + (job.stats.bytes_processed || 0), 0);
   return {
     session_id: sessionId,
     jobs: sorted.map((job) => job.qmb_job_id),
     count: sorted.length,
-    first: sorted[0]?.created_at ?? null,
-    latest: sorted[sorted.length - 1]?.created_at ?? null,
+    first: sorted[sorted.length - 1]?.created_at ?? null,
+    latest: sorted[0]?.created_at ?? null,
     bytes_processed: bytesProcessed,
     agents: uniqueSorted(sorted.map((job) => job.agent?.name)),
     tasks: uniqueSorted(sorted.map((job) => job.agent?.task)),
     cwds: uniqueSorted(sorted.map((job) => job.agent?.cwd)),
-    updated_at: sorted[sorted.length - 1]?.created_at ?? null,
+    updated_at: sorted[0]?.created_at ?? null,
     origin: mergeOrigins(sorted.map((job) => job.origin)),
     derived: true,
   };

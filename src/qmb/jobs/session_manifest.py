@@ -106,9 +106,10 @@ def recompute_from_jobs(session_id: str, records: list[JobRecord]) -> SessionMan
 
     All records are assumed to belong to ``session_id`` (callers filter first
     via :func:`effective_session_id`). Order does not matter; the manifest is
-    sorted/derived deterministically.
+    sorted/derived deterministically. ``jobs`` is stored newest first, matching
+    the UI's sidebar/session-detail ordering.
     """
-    sorted_records = sorted(records, key=lambda r: r.created_at)
+    sorted_records = sorted(records, key=lambda r: r.created_at, reverse=True)
     jobs: list[str] = []
     agents: set[str] = set()
     tasks: set[str] = set()
@@ -159,7 +160,9 @@ class _ManifestBuilder:
     cwds: set[str] = field(default_factory=set)
 
     def add(self, record: JobRecord) -> None:
-        self.jobs.append(record.qmb_job_id)
+        # Newest first, matching recompute_from_jobs' ordering. Jobs are added
+        # incrementally in creation order, so a new job goes to the front.
+        self.jobs.insert(0, record.qmb_job_id)
         self.bytes_processed += int(getattr(record, "bytes_processed", 0) or 0)
         created = record.created_at
         if self.first is None or created < self.first:

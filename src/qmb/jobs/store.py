@@ -231,6 +231,10 @@ class JobStore:
             self._write_manifest(manifest)
         return list(manifest.jobs)
 
+    def read_session_manifest(self, session_id: str) -> SessionManifest | None:
+        """Read one session's manifest file directly, without a full scan."""
+        return self._read_manifest(session_id)
+
     def session_manifests(self) -> list[SessionManifest]:
         """Return all session manifests, rebuilding from a full scan if needed.
 

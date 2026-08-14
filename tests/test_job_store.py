@@ -311,7 +311,7 @@ def test_create_appends_to_existing_manifest(tmp_path: Path) -> None:
     second = _create_with_session(store, session_id="agent-42", bytes_processed=1500)
 
     manifest = json.loads(store.manifest_path_for("agent-42").read_text(encoding="utf-8"))
-    assert manifest["jobs"] == [first.qmb_job_id, second.qmb_job_id]
+    assert manifest["jobs"] == [second.qmb_job_id, first.qmb_job_id]
     assert manifest["count"] == 2
     assert manifest["bytes_processed"] == 2000
     assert manifest["first"] is not None
@@ -336,7 +336,7 @@ def test_list_session_job_ids_reads_manifest(tmp_path: Path) -> None:
 
     ids = store.list_session_job_ids("agent-42")
 
-    assert ids == [first.qmb_job_id, second.qmb_job_id]
+    assert ids == [second.qmb_job_id, first.qmb_job_id]
 
 
 def test_list_session_job_ids_falls_back_to_full_scan_when_manifest_missing(

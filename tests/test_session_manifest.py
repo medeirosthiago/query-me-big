@@ -80,7 +80,7 @@ def test_update_manifest_with_job_appends_and_recomputes_aggregates() -> None:
     manifest = update_manifest_with_job(None, first)
     manifest = update_manifest_with_job(manifest, second)
 
-    assert manifest.jobs == ("qmb_1", "qmb_2")
+    assert manifest.jobs == ("qmb_2", "qmb_1")
     assert manifest.count == 2
     assert manifest.bytes_processed == 2000
     assert manifest.first == "2026-07-01T12:00:00+00:00"
@@ -159,7 +159,7 @@ def test_recompute_from_jobs_builds_manifest_from_scratch() -> None:
 
     manifest = recompute_from_jobs("agent-42", records)
 
-    assert manifest.jobs == ("qmb_1", "qmb_2", "qmb_3")
+    assert manifest.jobs == ("qmb_3", "qmb_2", "qmb_1")
     assert manifest.count == 3
     assert manifest.bytes_processed == 5000
     assert manifest.first == "2026-07-01T12:00:00+00:00"
