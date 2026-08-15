@@ -11,6 +11,37 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.8.0] - 2026-08-15
+
+### Added
+
+- `session:<id>` filter token in the web UI search bar: opening a job from a
+  session view scopes the Jobs tab to that session; erasing the token restores
+  the full list, and remaining text fuzzy-searches within the session.
+- Unindexed remote sessions: the remote scope lists `sessions/` blob names
+  (one API call) and surfaces manifest-only sessions as `UNINDEXED` stubs with
+  a dismissible staleness banner pointing at `qmb jobs reindex --remote`, so
+  exports from older qmb versions stay visible while the index lags.
+
+### Changed
+
+- Two-phase index loading in `qmb web`: `/api/index` gained
+  `?scope=local|remote`; the UI renders local jobs/sessions immediately and
+  merges remote data in lazily. Remote session summaries derive from
+  `index.json` (one GCS fetch instead of a per-manifest scan); full manifests
+  load on demand when a session opens.
+- Sidebar lists render incrementally on scroll, the Sessions tab is first and
+  default, session job lists sort newest-first, and origin badges use one
+  consistent Catppuccin-accented style.
+- The web server treats client disconnects (`BrokenPipeError`,
+  `ConnectionResetError`) as routine: no tracebacks, no error response down a
+  closed socket.
+
+### Fixed
+
+- Test suite is isolated from the developer's real `~/.qmb/config.toml` and
+  `QMB_*` environment, preventing accidental network calls during tests.
+
 ## [0.7.0] - 2026-08-14
 
 ### Added
