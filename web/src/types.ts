@@ -64,10 +64,10 @@ export interface JobSummary {
 export interface SessionSummary {
   session_id: string;
   jobs: string[];
-  count: number;
+  count: number | null;
   first: string | null;
   latest: string | null;
-  bytes_processed: number;
+  bytes_processed: number | null;
   agents: string[];
   tasks: string[];
   cwds: string[];
@@ -75,6 +75,13 @@ export interface SessionSummary {
   origin: Origin;
   /** True when synthesized client-side from jobs because no manifest entry exists. */
   derived?: boolean;
+  /**
+   * True for a minimal stub built from a cheap sessions/ prefix listing when
+   * a remote session manifest exists but `index.json` doesn't know about it
+   * yet (a stale index — see `qmb jobs reindex --remote`). Counts/dates are
+   * unknown until the on-demand session-detail fetch resolves the manifest.
+   */
+  unindexed?: boolean;
 }
 
 export interface IndexResponse {
@@ -82,6 +89,8 @@ export interface IndexResponse {
   jobs: JobSummary[];
   sessions: SessionSummary[];
   remote_error?: string;
+  /** Count of unindexed remote sessions detected this build (see `unindexed`). */
+  index_stale?: number;
 }
 
 export interface JobDetail {

@@ -89,10 +89,13 @@ class _FakeRemoteArchive:
         self.full_jobs: dict[str, dict[str, Any]] = {}
         self.previews: dict[str, str] = {}
         self.session_manifests: dict[str, SessionManifest] = {}
+        self.session_blob_names: list[tuple[str, str | None]] = []
         self.fetch_preview_calls = 0
         self.list_jobs_calls = 0
         self.fetch_session_manifest_calls = 0
+        self.list_session_blob_names_calls = 0
         self.list_error: Exception | None = None
+        self.list_session_blob_names_error: Exception | None = None
 
     def list_jobs(self) -> list[dict[str, Any]]:
         self.list_jobs_calls += 1
@@ -104,6 +107,12 @@ class _FakeRemoteArchive:
         if self.list_error:
             raise self.list_error
         return self.index_sessions
+
+    def list_session_blob_names(self) -> list[tuple[str, str | None]]:
+        self.list_session_blob_names_calls += 1
+        if self.list_session_blob_names_error:
+            raise self.list_session_blob_names_error
+        return self.session_blob_names
 
     def fetch_job_artifacts(self, job_id: str) -> dict[str, Any]:
         try:
@@ -130,6 +139,9 @@ class _AlwaysRaisingRemoteArchive:
         raise AssertionError("scope=local must never call the remote archive")
 
     def list_sessions(self) -> list[SessionManifest]:
+        raise AssertionError("scope=local must never call the remote archive")
+
+    def list_session_blob_names(self) -> list[tuple[str, str | None]]:
         raise AssertionError("scope=local must never call the remote archive")
 
     def fetch_session_manifest(self, session_id: str) -> SessionManifest | None:
@@ -349,6 +361,132 @@ def test_api_index_scope_remote_derives_sessions_from_index_entries(
     assert session["origin"] == "remote"
     # This is the whole point: one index.json download, no manifest scan.
     assert fake.list_jobs_calls == 1
+
+
+def test_api_index_scope_remote_adds_unindexed_stub_for_manifest_missing_from_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest visible via the sessions/ listing but absent from
+    index.json (a stale index — e.g. an older qmb export job that never ran
+    `qmb jobs reindex --remote`) must still surface as a stub session."""
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_a", session_id="session-known")]
+    fake.session_blob_names = [
+        ("session-known", "2024-01-02T00:00:00+00:00"),
+        ("roadie-bq-growth-20260815", "2026-08-15T06:00:00+00:00"),
+    ]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=remote")
+
+    assert status == 200
+    assert payload["index_stale"] == 1
+    by_id = {s["session_id"]: s for s in payload["sessions"]}
+    assert set(by_id) == {"session-known", "roadie-bq-growth-20260815"}
+
+    known = by_id["session-known"]
+    assert "unindexed" not in known or known["unindexed"] is not True
+
+    stub = by_id["roadie-bq-growth-20260815"]
+    assert stub["unindexed"] is True
+    assert stub["origin"] == "remote"
+    assert stub["jobs"] == []
+    assert stub["count"] is None
+    assert stub["latest"] == "2026-08-15T06:00:00+00:00"
+    assert fake.list_session_blob_names_calls == 1
+
+
+def test_api_index_scope_remote_omits_index_stale_when_nothing_unindexed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_a", session_id="session-known")]
+    fake.session_blob_names = [("session-known", "2024-01-02T00:00:00+00:00")]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=remote")
+
+    assert status == 200
+    assert "index_stale" not in payload
+
+
+def test_api_index_scope_remote_listing_failure_degrades_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure of the supplementary sessions/ listing must not break the
+    (already-succeeded) index.json-derived remote payload."""
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.index_jobs = [_remote_index_entry("qmb_a", session_id="session-known")]
+    fake.list_session_blob_names_error = RuntimeError("listing unavailable")
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, payload = _get_json(netloc, "/api/index?scope=remote")
+
+    assert status == 200
+    assert "index_stale" not in payload
+    assert [s["session_id"] for s in payload["sessions"]] == ["session-known"]
+
+
+def test_api_index_no_scope_combined_includes_index_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    _seed_job(store, session_id="session-x")
+
+    fake = _FakeRemoteArchive()
+    fake.session_blob_names = [("stale-remote-session", None)]
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        _, combined = _get_json(netloc, "/api/index")
+
+    assert combined["index_stale"] == 1
+    by_session = {s["session_id"]: s for s in combined["sessions"]}
+    assert by_session["stale-remote-session"]["unindexed"] is True
+
+
+def test_api_session_detail_opens_unindexed_stub_via_manifest_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening an unindexed stub session must serve full detail from the
+    manifest via the existing on-demand session-detail endpoint."""
+    store = JobStore(root=tmp_path / "jobs")
+
+    fake = _FakeRemoteArchive()
+    fake.session_blob_names = [("roadie-bq-growth-20260815", "2026-08-15T06:00:00+00:00")]
+    fake.session_manifests["roadie-bq-growth-20260815"] = SessionManifest(
+        session_id="roadie-bq-growth-20260815",
+        jobs=("qmb_a", "qmb_b"),
+        count=2,
+        agents=("roadie",),
+        tasks=("growth backfill",),
+        cwds=("/repo",),
+    )
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", lambda destination: fake)
+
+    with running_server(store, remote_destination="gs://bucket/qmb") as netloc:
+        status, index_payload = _get_json(netloc, "/api/index?scope=remote")
+        assert index_payload["index_stale"] == 1
+
+        status, detail = _get_json(
+            netloc, "/api/sessions/roadie-bq-growth-20260815?scope=remote"
+        )
+
+    assert status == 200
+    assert detail["session_id"] == "roadie-bq-growth-20260815"
+    assert detail["jobs"] == ["qmb_a", "qmb_b"]
+    assert detail["count"] == 2
+    assert detail["agents"] == ["roadie"]
+    assert "unindexed" not in detail
 
 
 def test_api_index_no_scope_matches_scoped_assembly(

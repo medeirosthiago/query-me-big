@@ -1,5 +1,6 @@
 /** Port of `qmb.types.fmt_bytes`: human-readable byte counts. */
-export function fmtBytes(n: number): string {
+export function fmtBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "\u2014";
   if (n < 1024) return `${n} B`;
   let value = n;
   for (const unit of ["KB", "MB", "GB", "TB"]) {
