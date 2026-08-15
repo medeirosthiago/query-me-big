@@ -218,6 +218,15 @@ class JobIndexCache:
         ``session_id``) instead of a ``sessions/`` prefix scan — no
         agents/tasks/cwds are available from index entries, so those come
         back empty and each derived session is tagged ``"derived": True``.
+
+        Machines that export jobs + session manifests but never run
+        ``qmb jobs reindex --remote`` leave ``index.json`` stale, so their
+        new sessions would otherwise stay invisible. A second, cheap
+        names-only listing of the ``sessions/`` prefix (see
+        ``GcsRemoteArchive.list_session_blob_names``) catches those: any
+        session id present there but absent from the index-derived set above
+        is appended as a minimal ``"unindexed"`` stub (see
+        ``_unindexed_session_stubs``).
         """
         payload: dict[str, Any] = {"generated_at": _utcnow_iso(), "jobs": [], "sessions": []}
         if self._remote_destination is None:
@@ -231,9 +240,13 @@ class JobIndexCache:
             return payload
 
         payload["jobs"] = [{**job, "origin": "remote"} for job in remote_jobs]
-        payload["sessions"] = [
-            {**session, "origin": "remote"} for session in _derive_remote_sessions(remote_jobs)
-        ]
+        sessions = _derive_remote_sessions(remote_jobs)
+        indexed_ids = {session["session_id"] for session in sessions}
+        stubs = _unindexed_session_stubs(archive, indexed_ids)
+        sessions.extend(stubs)
+        payload["sessions"] = [{**session, "origin": "remote"} for session in sessions]
+        if stubs:
+            payload["index_stale"] = len(stubs)
         return payload
 
     def _combine(self, local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
@@ -253,6 +266,8 @@ class JobIndexCache:
 
         payload["jobs"] = _merge_tagged(local["jobs"], remote["jobs"], key="qmb_job_id")
         payload["sessions"] = _merge_tagged(local["sessions"], remote["sessions"], key="session_id")
+        if "index_stale" in remote:
+            payload["index_stale"] = remote["index_stale"]
         return payload
 
 
@@ -498,6 +513,42 @@ def _derive_remote_sessions(remote_jobs: list[dict[str, Any]]) -> list[dict[str,
             }
         )
     return sessions
+
+
+def _unindexed_session_stubs(
+    archive: Any, indexed_ids: set[str]
+) -> list[dict[str, Any]]:
+    """Return minimal stub sessions for manifests missing from ``index.json``.
+
+    Best-effort: a failure of the (already supplementary) names-only listing
+    just means stale-index detection is skipped this time, not that the
+    whole remote index request fails.
+    """
+    try:
+        blob_names = archive.list_session_blob_names()
+    except Exception:
+        return []
+
+    stubs: list[dict[str, Any]] = []
+    for session_id, updated_at in blob_names:
+        if session_id in indexed_ids:
+            continue
+        stubs.append(
+            {
+                "session_id": session_id,
+                "jobs": [],
+                "count": None,
+                "first": None,
+                "latest": updated_at,
+                "bytes_processed": None,
+                "agents": [],
+                "tasks": [],
+                "cwds": [],
+                "updated_at": updated_at,
+                "unindexed": True,
+            }
+        )
+    return stubs
 
 
 def _merge_tagged(

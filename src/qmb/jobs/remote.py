@@ -204,6 +204,25 @@ class GcsRemoteArchive:
                 continue
         return manifests
 
+    def list_session_blob_names(self) -> list[tuple[str, str | None]]:
+        """Return ``(session_id, updated_iso)`` pairs from a names-only scan.
+
+        Cheap stale-index detection: a single paginated ``list_blobs`` call
+        over the ``sessions/`` prefix, returning blob names + timestamps only
+        — never downloading manifest content. The session id is the blob's
+        filename stem, which is ``safe_path_segment``-sanitized and therefore
+        only a provisional session id; callers needing the true id (and the
+        rest of the manifest) should fetch it via ``fetch_session_manifest``.
+        """
+        list_prefix = f"{self._join_prefix('sessions')}/"
+        pairs: list[tuple[str, str | None]] = []
+        for blob in self._client_or_default().list_blobs(self.bucket_name, prefix=list_prefix):
+            if not blob.name.endswith(".json"):
+                continue
+            stem = blob.name.rsplit("/", 1)[-1][: -len(".json")]
+            pairs.append((stem, _blob_updated_iso(blob)))
+        return pairs
+
     def build_index(self) -> dict[str, Any]:
         """Rebuild the full index payload from a scan of every remote job.
 
@@ -534,6 +553,17 @@ def _validate_download(directory: Path, qmb_job_id: str) -> None:
             f"Remote metadata qmb_job_id mismatch: expected {qmb_job_id}, "
             f"got {metadata.get('qmb_job_id')}"
         )
+
+
+def _blob_updated_iso(blob: Any) -> str | None:
+    """Best-effort ISO timestamp from a blob's ``updated`` attribute, if any."""
+    updated = getattr(blob, "updated", None)
+    if updated is None:
+        return None
+    if isinstance(updated, str):
+        return updated
+    isoformat = getattr(updated, "isoformat", None)
+    return isoformat() if isoformat is not None else str(updated)
 
 
 def _empty_index() -> dict[str, Any]:

@@ -135,6 +135,7 @@ export function App() {
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [dismissedRemoteError, setDismissedRemoteError] = useState<string | null>(null);
+  const [dismissedIndexStale, setDismissedIndexStale] = useState<number | null>(null);
   // Full session detail (agents/tasks/cwds) fetched on-demand for remote
   // sessions, keyed by session id, overriding the derived summary once it
   // resolves. See the effect below and `openSession`.
@@ -169,6 +170,7 @@ export function App() {
       .then((data) => {
         setRemoteIndex(data);
         setDismissedRemoteError(null);
+        setDismissedIndexStale(null);
       })
       .catch((err: Error) =>
         setRemoteIndex((prev) => ({
@@ -377,6 +379,8 @@ export function App() {
 
   const remoteErrorToShow =
     index?.remote_error && index.remote_error !== dismissedRemoteError ? index.remote_error : null;
+  const indexStaleToShow =
+    index?.index_stale && index.index_stale !== dismissedIndexStale ? index.index_stale : null;
 
   return (
     <div class="app">
@@ -453,10 +457,12 @@ export function App() {
                       {session.derived && session.origin !== "remote" && (
                         <span class="badge badge--derived">no manifest</span>
                       )}
+                      {session.unindexed && <span class="badge badge--derived">unindexed</span>}
                     </span>
                   </div>
                   <div class="row__excerpt">
-                    {session.count} jobs · {fmtDate(session.first)} → {fmtDate(session.latest)}
+                    {session.unindexed ? "? jobs" : `${session.count} jobs`} ·{" "}
+                    {fmtDate(session.first)} → {fmtDate(session.latest)}
                   </div>
                   {session.agents.length > 0 && (
                     <div class="row__meta">
@@ -504,6 +510,15 @@ export function App() {
           <Banner
             message={`Remote archive error: ${remoteErrorToShow}`}
             onDismiss={() => setDismissedRemoteError(remoteErrorToShow)}
+          />
+        )}
+        {indexStaleToShow && (
+          <Banner
+            message={
+              `Remote index is missing ${indexStaleToShow} session(s) — run ` +
+              "`qmb jobs reindex --remote` to also see their jobs in the Jobs tab."
+            }
+            onDismiss={() => setDismissedIndexStale(indexStaleToShow)}
           />
         )}
         {!selected && <div class="empty-state">Select a job or session to see details.</div>}

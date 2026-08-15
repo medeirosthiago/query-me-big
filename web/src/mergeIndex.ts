@@ -22,6 +22,7 @@ export function mergeIndex(
     jobs: mergeTagged(local.jobs, remote.jobs, (job) => job.qmb_job_id),
     sessions: mergeTagged(local.sessions, remote.sessions, (session) => session.session_id),
     remote_error: remote.remote_error,
+    index_stale: remote.index_stale,
   };
 }
 

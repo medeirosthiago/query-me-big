@@ -33,6 +33,7 @@ export function SessionDetail({ session, jobs, fetchFailed, onSelectJob }: Props
         <span class="row__badges">
           <span class={`badge badge--${session.origin}`}>{session.origin}</span>
           {isNoManifest && <span class="badge badge--derived">no manifest</span>}
+          {session.unindexed && <span class="badge badge--derived">unindexed</span>}
         </span>
       </header>
 
@@ -41,6 +42,15 @@ export function SessionDetail({ session, jobs, fetchFailed, onSelectJob }: Props
           No session manifest was found for this session — these fields were computed from its
           jobs in the index. Run <code>qmb jobs reindex</code> to persist a manifest.
           <CopyLine command="qmb jobs reindex" />
+        </div>
+      )}
+
+      {session.unindexed && (
+        <div class="notice">
+          This session's manifest exists remotely but hasn't been picked up by the remote index
+          yet — its jobs stay absent from the Jobs tab until reindexed. Fetching its full detail
+          now…
+          <CopyLine command="qmb jobs reindex --remote" />
         </div>
       )}
 
@@ -54,7 +64,7 @@ export function SessionDetail({ session, jobs, fetchFailed, onSelectJob }: Props
       <section class="detail__grid">
         <div class="field">
           <span class="field__label">Jobs</span>
-          <span class="field__value">{session.count}</span>
+          <span class="field__value">{session.count ?? "?"}</span>
         </div>
         <div class="field">
           <span class="field__label">Range</span>
