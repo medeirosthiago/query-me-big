@@ -7,6 +7,7 @@ import http.client
 import json
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -646,6 +647,80 @@ def test_api_session_detail_remote_without_remote_configured_returns_404(
         status, payload = _get_json(netloc, "/api/sessions/session-x?scope=remote")
 
     assert status == 404
+    assert "error" in payload
+
+
+# -- /api/search ------------------------------------------------------------
+
+
+def test_api_search_stages_recent_sql_then_preview_and_older_jobs(tmp_path: Path) -> None:
+    root = tmp_path / "jobs"
+    now = datetime.now(UTC)
+    recent_nonces = iter(("recent1", "recent2"))
+    recent_store = JobStore(
+        root=root,
+        now=lambda: now - timedelta(days=1),
+        nonce=lambda: next(recent_nonces),
+    )
+    recent_sql = _seed_job(
+        recent_store,
+        sql=f"SELECT '{'x' * 4100}bianca.teixeira' AS email",
+    )
+    recent_preview = _seed_job(
+        recent_store,
+        sql="SELECT email FROM users",
+        preview_rows=[{"id": "bianca.teixeira@moises.ai"}],
+    )
+    older_store = JobStore(root=root, now=lambda: now - timedelta(days=4), nonce=lambda: "older")
+    older_sql = _seed_job(older_store, sql="SELECT * FROM `analytics.bianca.teixeira`")
+
+    with running_server(JobStore(root=root)) as netloc:
+        _, sql_payload = _get_json(
+            netloc,
+            "/api/search?q=bianca.teixeira&period=recent&target=sql",
+        )
+        _, preview_payload = _get_json(
+            netloc,
+            "/api/search?q=bianca.teixeira&period=recent&target=preview",
+        )
+        _, older_payload = _get_json(
+            netloc,
+            "/api/search?q=bianca.teixeira&period=older&target=sql",
+        )
+
+    assert sql_payload["job_ids"] == [recent_sql.qmb_job_id]
+    assert preview_payload["job_ids"] == [recent_preview.qmb_job_id]
+    assert older_payload["job_ids"] == [older_sql.qmb_job_id]
+
+
+def test_api_search_is_case_insensitive_and_can_scope_to_session(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "jobs")
+    matching = _seed_job(store, sql="SELECT * FROM Customers", session_id="wanted")
+    _seed_job(store, sql="SELECT * FROM Customers", session_id="other")
+
+    with running_server(store) as netloc:
+        status, payload = _get_json(
+            netloc,
+            "/api/search?q=customers&period=recent&target=sql&session_id=wanted",
+        )
+
+    assert status == 200
+    assert payload["job_ids"] == [matching.qmb_job_id]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/search?period=recent&target=sql",
+        "/api/search?q=x&period=all&target=sql",
+        "/api/search?q=x&period=recent&target=result",
+    ],
+)
+def test_api_search_rejects_invalid_params(tmp_path: Path, path: str) -> None:
+    with running_server(JobStore(root=tmp_path / "jobs")) as netloc:
+        status, payload = _get_json(netloc, path)
+
+    assert status == 400
     assert "error" in payload
 
 

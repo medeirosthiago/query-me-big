@@ -13,7 +13,7 @@ import mimetypes
 import sys
 import threading
 import urllib.parse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +25,7 @@ from qmb.jobs.store import AmbiguousJobIdError, JobNotFoundError, JobStore
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 DEFAULT_PAGE_SIZE = 200
+RECENT_SEARCH_DAYS = 3
 _QUIET_ERRORS = (BrokenPipeError, ConnectionResetError)
 
 PLACEHOLDER_HTML = """<!doctype html>
@@ -137,6 +138,42 @@ class JobIndexCache:
             "page": result.page + 1,
             "page_size": page_size,
         }
+
+    def search_local(
+        self,
+        text: str,
+        *,
+        period: str,
+        target: str,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        """Search local SQL or archived preview rows, newest jobs first."""
+        needle = text.casefold()
+        cutoff = datetime.now(UTC) - timedelta(days=RECENT_SEARCH_DAYS)
+        matches: list[str] = []
+        for record in self._store.list():
+            if session_id is not None and record.session_id != session_id:
+                continue
+            is_recent = record.created_at >= cutoff
+            if (period == "recent") != is_recent:
+                continue
+            path = record.query_path if target == "sql" else record.preview_path
+            try:
+                haystack = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if target == "sql":
+                metadata = (
+                    record.qmb_job_id,
+                    record.session_id,
+                    record.source.label,
+                    record.agent_context.name if record.agent_context is not None else None,
+                    record.created_at.isoformat(),
+                )
+                haystack += "\n" + "\n".join(value for value in metadata if value)
+            if needle in haystack.casefold():
+                matches.append(record.qmb_job_id)
+        return {"job_ids": matches, "period": period, "target": target}
 
     def _remote_preview_rows(
         self, job_id: str, archive: GcsRemoteArchive
@@ -318,6 +355,8 @@ class QmbRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/index":
                 self._handle_index(query, include_body=include_body)
+            elif path == "/api/search":
+                self._handle_search(query, include_body=include_body)
             elif path.startswith("/api/sessions/"):
                 self._handle_session(path, query, include_body=include_body)
             elif path.startswith("/api/jobs/"):
@@ -351,6 +390,24 @@ class QmbRequestHandler(BaseHTTPRequestHandler):
         scope = _parse_scope(query)
         refresh = _first(query, "refresh") == "1"
         payload = self.server.index_cache.get(scope=scope, refresh=refresh)
+        self._send_json(payload, status=HTTPStatus.OK, include_body=include_body)
+
+    def _handle_search(self, query: dict[str, list[str]], *, include_body: bool) -> None:
+        text = (_first(query, "q") or "").strip()
+        period = _first(query, "period")
+        target = _first(query, "target")
+        if not text:
+            raise _ApiError(HTTPStatus.BAD_REQUEST, "Missing search query")
+        if period not in ("recent", "older"):
+            raise _ApiError(HTTPStatus.BAD_REQUEST, f"Invalid period: {period!r}")
+        if target not in ("sql", "preview"):
+            raise _ApiError(HTTPStatus.BAD_REQUEST, f"Invalid target: {target!r}")
+        payload = self.server.index_cache.search_local(
+            text,
+            period=period,
+            target=target,
+            session_id=_first(query, "session_id"),
+        )
         self._send_json(payload, status=HTTPStatus.OK, include_body=include_body)
 
     def _handle_session(
