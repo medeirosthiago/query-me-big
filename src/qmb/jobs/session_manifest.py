@@ -64,7 +64,7 @@ class SessionManifest:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SessionManifest":
+    def from_dict(cls, data: dict[str, Any]) -> SessionManifest:
         return cls(
             session_id=data["session_id"],
             jobs=tuple(data.get("jobs") or []),
@@ -82,7 +82,7 @@ class SessionManifest:
         return json.dumps(self.to_dict(), indent=2)
 
     @classmethod
-    def from_json(cls, text: str) -> "SessionManifest":
+    def from_json(cls, text: str) -> SessionManifest:
         return cls.from_dict(json.loads(text))
 
 

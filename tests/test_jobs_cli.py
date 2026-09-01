@@ -701,7 +701,6 @@ def test_jobs_reindex_rebuilds_manifests_from_existing_jobs(
     """`qmb jobs reindex` rebuilds session manifests from a full scan."""
     import shutil as _shutil
 
-    from qmb.jobs.models import EngineMetadata, SourceMetadata
     from qmb.jobs.store import JobStore
 
     jobs_root = tmp_path / "jobs"
