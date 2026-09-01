@@ -11,6 +11,19 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.9.0] - 2026-09-01
+
+### Added
+
+- Staged archive search in `qmb web`: recent SQL, recent preview rows, older
+  SQL, then older preview rows. Searches use only archived artifacts and never
+  run BigQuery queries.
+
+### Changed
+
+- Web job search is debounced, cancellable, case-insensitive, and updates the
+  result list after each stage so large archives no longer block typing.
+
 ## [0.8.0] - 2026-08-15
 
 ### Added
