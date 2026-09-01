@@ -285,7 +285,6 @@ def _store_with_clock(tmp_path: Path) -> Any:
     """A store with iter-based now/nonce so multiple jobs get distinct ids."""
     _, store_module = _jobs_modules()
     times: list[datetime] = []
-    nonces: list[str] = []
 
     def now() -> datetime:
         if not times:
