@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { fetchIndex, fetchSessionDetail } from "./api";
+import { fetchArchiveSearch, fetchIndex, fetchSessionDetail } from "./api";
 import { Banner } from "./components/Banner";
 import { Icon } from "./components/Icon";
 import { JobDetail } from "./components/JobDetail";
@@ -8,16 +8,28 @@ import { SessionDetail } from "./components/SessionDetail";
 import { deriveMissingSessions } from "./deriveSessions";
 import { fmtBytes, fmtDate } from "./format";
 import { mergeIndex } from "./mergeIndex";
-import { searchJobs, searchSessions } from "./search";
-import type { IndexResponse, JobSummary, SessionSummary } from "./types";
+import { extractSessionToken, searchJobs, searchSessions } from "./search";
+import type {
+  IndexResponse,
+  JobSummary,
+  SearchPeriod,
+  SearchTarget,
+  SessionSummary,
+} from "./types";
 
 // Lazy incremental rendering: render this many rows initially, then append
 // another page each time the list scrolls near the bottom. All data is
 // already in memory (fetched in full), so this is purely a render-cost cap.
 const ROWS_PER_PAGE = 100;
 const SCROLL_LOAD_THRESHOLD_PX = 200;
+const SEARCH_DEBOUNCE_MS = 200;
 type Tab = "jobs" | "sessions";
 type Selected = { type: "job"; id: string } | { type: "session"; id: string } | null;
+type ArchiveSearchState = {
+  query: string;
+  jobIds: string[];
+  status: string;
+};
 
 type Theme = "auto" | "latte" | "mocha";
 const THEME_KEY = "qmb-theme";
@@ -146,6 +158,7 @@ export function App() {
 
   const [tab, setTab] = useState<Tab>("sessions");
   const [query, setQuery] = useState("");
+  const [archiveSearch, setArchiveSearch] = useState<ArchiveSearchState | null>(null);
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState<Selected>(null);
   const [renderCount, setRenderCount] = useState(ROWS_PER_PAGE);
@@ -203,10 +216,71 @@ export function App() {
     return base.map((s) => sessionOverrides[s.session_id] ?? s);
   }, [index, sessionOverrides]);
 
-  const filteredJobs = useMemo(
-    () => (index ? searchJobs(index.jobs, query) : []),
-    [index, query],
-  );
+  const searchText = extractSessionToken(query).rest.trim();
+
+  useEffect(() => {
+    const { sessionId, rest } = extractSessionToken(query);
+    const text = rest.trim();
+    if (!text || !localIndex) {
+      setArchiveSearch(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const stages: [SearchPeriod, SearchTarget, string][] = [
+      ["recent", "sql", "searching recent SQL…"],
+      ["recent", "preview", "searching recent previews…"],
+      ["older", "sql", "searching older SQL…"],
+      ["older", "preview", "searching older previews…"],
+    ];
+    setArchiveSearch({ query, jobIds: [], status: "searching recent SQL…" });
+
+    const timer = window.setTimeout(async () => {
+      const found = new Set<string>();
+      try {
+        for (const [period, target, status] of stages) {
+          setArchiveSearch((current) =>
+            current?.query === query ? { ...current, status } : current,
+          );
+          const result = await fetchArchiveSearch(text, period, target, {
+            sessionId,
+            signal: controller.signal,
+          });
+          for (const id of result.job_ids) found.add(id);
+          setArchiveSearch((current) =>
+            current?.query === query
+              ? { query, jobIds: [...found], status }
+              : current,
+          );
+        }
+        setArchiveSearch((current) =>
+          current?.query === query ? { ...current, status: "search complete" } : current,
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        const message = error instanceof Error ? error.message : String(error);
+        setArchiveSearch((current) =>
+          current?.query === query ? { ...current, status: `search failed: ${message}` } : current,
+        );
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, localIndex]);
+
+  const filteredJobs = useMemo(() => {
+    if (!index) return [];
+    if (!searchText) return searchJobs(index.jobs, query);
+    if (archiveSearch?.query !== query) return [];
+    const jobsById = new Map(index.jobs.map((job) => [job.qmb_job_id, job]));
+    return archiveSearch.jobIds.flatMap((id) => {
+      const job = jobsById.get(id);
+      return job ? [job] : [];
+    });
+  }, [index, query, searchText, archiveSearch]);
   const filteredSessions = useMemo(
     () => searchSessions(allSessions, query),
     [allSessions, query],
@@ -499,6 +573,9 @@ export function App() {
 
         <div class="list-footer">
           Showing {visibleCount} of {totalCount}
+          {tab === "jobs" && archiveSearch?.query === query && (
+            <span class="list-footer__remote-status"> · {archiveSearch.status}</span>
+          )}
           {remoteLoading && !index?.remote_error && (
             <span class="list-footer__remote-status"> · loading remote…</span>
           )}

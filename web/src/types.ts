@@ -115,3 +115,12 @@ export interface PreviewResponse {
   page: number;
   page_size: number;
 }
+
+export type SearchPeriod = "recent" | "older";
+export type SearchTarget = "sql" | "preview";
+
+export interface SearchResponse {
+  job_ids: string[];
+  period: SearchPeriod;
+  target: SearchTarget;
+}

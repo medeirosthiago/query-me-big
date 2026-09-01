@@ -6,6 +6,9 @@ import type {
   JobSummary,
   Origin,
   PreviewResponse,
+  SearchPeriod,
+  SearchResponse,
+  SearchTarget,
   SessionSummary,
   SourceMetadata,
 } from "./types";
@@ -96,8 +99,8 @@ interface RawIndexResponse extends Omit<IndexResponse, "jobs"> {
   jobs: RawJobEntry[];
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const message = (body && (body as { error?: string }).error) || response.statusText;
@@ -151,4 +154,15 @@ export function fetchJobPreview(
   return getJson<PreviewResponse>(
     `/api/jobs/${encodeURIComponent(jobId)}/preview?page=${page}&page_size=${pageSize}`,
   );
+}
+
+export function fetchArchiveSearch(
+  query: string,
+  period: SearchPeriod,
+  target: SearchTarget,
+  options: { sessionId?: string | null; signal?: AbortSignal } = {},
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q: query, period, target });
+  if (options.sessionId) params.set("session_id", options.sessionId);
+  return getJson<SearchResponse>(`/api/search?${params}`, options.signal);
 }
