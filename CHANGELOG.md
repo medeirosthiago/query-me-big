@@ -11,7 +11,7 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
-## [0.10.0] - 2026-10-23
+## [0.10.0] - 2026-10-24
 
 ### Added
 
