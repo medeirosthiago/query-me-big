@@ -99,6 +99,7 @@ def _patch_pipeline_dependencies(
         resolved: Any,
         dry_run: bool = False,
         max_bytes_billed: int | None = None,
+        labels: dict[str, str] | None = None,
     ) -> QueryResultHandle:
         execute_calls.append(
             {
@@ -106,6 +107,7 @@ def _patch_pipeline_dependencies(
                 "resolved": resolved,
                 "dry_run": dry_run,
                 "max_bytes_billed": max_bytes_billed,
+                "labels": labels,
             }
         )
         return handle
@@ -289,3 +291,65 @@ def test_archive_failure_re_raised_when_not_ignored(
 
     with pytest.raises(OSError, match="Disk full"):
         run_query_pipeline(request, job_store=FailingStore())
+
+
+def _fail_get_client(*args: Any, **kwargs: Any) -> Any:
+    raise AssertionError("get_client must not be called when a client is injected")
+
+
+def test_injected_client_is_used_without_calling_get_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = FakeClient(rows=[{"x": 1, "name": "one"}])
+    execute_calls = _patch_pipeline_dependencies(
+        monkeypatch, client=FakeClient(rows=[]), handle=_handle(total_rows=1)
+    )
+    monkeypatch.setattr("qmb.bigquery.client.get_client", _fail_get_client)
+    store = _store(tmp_path)
+
+    request = QueryRequest(mode=InputMode.SQL, sql="SELECT 1 AS x", no_tui=True)
+
+    outcome = run_query_pipeline(request, client=client, job_store=store)
+
+    assert outcome.client is client
+    assert [call["client"] for call in execute_calls] == [client]
+    # Archive preview rows are paged through the injected client too.
+    assert client.list_rows_calls
+    assert outcome.archived_job is not None
+
+
+def test_injected_client_is_used_for_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeClient(rows=[])
+    execute_calls = _patch_pipeline_dependencies(
+        monkeypatch, client=FakeClient(rows=[]), handle=_handle(total_rows=0)
+    )
+    monkeypatch.setattr("qmb.bigquery.client.get_client", _fail_get_client)
+
+    request = QueryRequest(mode=InputMode.SQL, sql="SELECT 1", dry_run=True, no_tui=True)
+
+    outcome = run_query_pipeline(request, client=client)
+
+    assert outcome.dry_run is True
+    assert outcome.client is client
+    assert execute_calls[0]["client"] is client
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_pipeline_passes_labels_to_executor(monkeypatch: pytest.MonkeyPatch, dry_run: bool) -> None:
+    client = FakeClient(rows=[{"x": 1, "name": "one"}])
+    execute_calls = _patch_pipeline_dependencies(
+        monkeypatch, client=client, handle=_handle(total_rows=1)
+    )
+
+    request = QueryRequest(
+        mode=InputMode.SQL,
+        sql="SELECT 1",
+        dry_run=dry_run,
+        labels={"gq_session": "s-1"},
+        no_tui=True,
+    )
+
+    run_query_pipeline(request)
+
+    assert execute_calls[0]["dry_run"] is dry_run
+    assert execute_calls[0]["labels"] == {"gq_session": "s-1"}

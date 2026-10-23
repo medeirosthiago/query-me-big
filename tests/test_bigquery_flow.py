@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from typing import Any
 
+import pytest
+
 from qmb.bigquery.executor import execute_query
 from qmb.bigquery.exporters import export_results
 from qmb.bigquery.pager import fetch_page, iter_all_rows
@@ -148,3 +150,82 @@ def test_iter_all_rows_matches_the_explicit_paging_path() -> None:
     assert page.rows == rows[:2]
 
     assert list(iter_all_rows(client, handle, chunk_size=2)) == rows
+
+
+def test_get_client_passes_credentials_through(monkeypatch) -> None:
+    from qmb.bigquery import client as client_module
+
+    captured: dict[str, Any] = {}
+
+    def fake_client(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "client"
+
+    monkeypatch.setattr(client_module.bigquery, "Client", fake_client)
+    credentials = object()
+
+    assert client_module.get_client("proj", "EU", credentials=credentials) == "client"
+    assert captured == {"project": "proj", "location": "EU", "credentials": credentials}
+
+
+def test_get_client_omits_credentials_by_default(monkeypatch) -> None:
+    from qmb.bigquery import client as client_module
+
+    captured: dict[str, Any] = {}
+
+    def fake_client(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "client"
+
+    monkeypatch.setattr(client_module.bigquery, "Client", fake_client)
+
+    client_module.get_client()
+
+    assert captured == {}
+
+
+def test_execute_query_sets_job_labels() -> None:
+    client = FakeBigQueryClient(_rows(), _schema())
+
+    execute_query(
+        client,
+        ResolvedQuery(sql="select 1", source_label="ad-hoc"),
+        labels={"gq_session": "s-1", "gq_tool": "run_query"},
+    )
+
+    assert client.job_config.labels == {"gq_session": "s-1", "gq_tool": "run_query"}
+
+
+def test_execute_query_sets_job_labels_on_dry_run() -> None:
+    client = FakeBigQueryClient(_rows(), _schema())
+
+    execute_query(
+        client,
+        ResolvedQuery(sql="select 1", source_label="ad-hoc"),
+        dry_run=True,
+        labels={"gq_tool": "dry_run"},
+    )
+
+    assert client.job_config.dry_run is True
+    assert client.job_config.labels == {"gq_tool": "dry_run"}
+
+
+def test_execute_query_leaves_labels_unset_when_empty() -> None:
+    client = FakeBigQueryClient(_rows(), _schema())
+
+    execute_query(client, ResolvedQuery(sql="select 1", source_label="ad-hoc"), labels={})
+
+    assert "labels" not in client.job_config.to_api_repr()
+
+
+def test_execute_query_rejects_invalid_labels_before_querying() -> None:
+    client = FakeBigQueryClient(_rows(), _schema())
+
+    with pytest.raises(ValueError, match="BadKey"):
+        execute_query(
+            client,
+            ResolvedQuery(sql="select 1", source_label="ad-hoc"),
+            labels={"BadKey": "v"},
+        )
+
+    assert not hasattr(client, "sql")

@@ -117,6 +117,7 @@ class ExecutionOptions:
     dry_run: bool = False
     max_bytes_billed: int | None = None
     where: str | None = None
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,7 @@ class QueryRequest:
     dry_run: bool = False
     max_bytes_billed: int | None = None
     where: str | None = None
+    labels: dict[str, str] = field(default_factory=dict)
     session_id: str | None = None
     parent_job_id: str | None = None
     agent_context: AgentContext | None = None
@@ -176,6 +178,7 @@ class QueryRequest:
             dry_run=self.dry_run,
             max_bytes_billed=self.max_bytes_billed,
             where=self.where,
+            labels=self.labels,
         )
 
     @property

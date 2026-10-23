@@ -11,6 +11,28 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.10.0] - 2026-10-23
+
+### Added
+
+- Injectable BigQuery client for library use: `get_client(credentials=...)`
+  builds a client from explicit credentials, and
+  `run_query_pipeline(request, client=...)` runs with a caller-built client
+  instead of Application Default Credentials.
+- BigQuery job labels: `qmb run --label KEY=VALUE` (repeatable), plus
+  `QueryRequest.labels` / `execute_query(labels=...)` in the library. Labels
+  are validated against BigQuery's rules and also apply to dry runs.
+- `qmb.application.catalog` library functions: `describe_target()` and
+  `browse_catalog()` return the same payloads `qmb describe` and `qmb browse`
+  print; the commands are now thin wrappers around them.
+
+### Changed
+
+- Remote session manifests (`sessions/<id>.json`) are written with GCS
+  generation preconditions and retried on conflict, so concurrent exports
+  into the same session no longer drop jobs. If retries run out, the export
+  still succeeds and reports a warning.
+
 ## [0.9.0] - 2026-09-01
 
 ### Added

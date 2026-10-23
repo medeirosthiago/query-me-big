@@ -3,7 +3,7 @@
 The pipeline encapsulates the steps that used to live inline in
 ``cli._execute``:
 
-    1. Create a BigQuery client.
+    1. Create a BigQuery client (unless the caller passes one).
     2. Resolve the request to SQL.
     3. Apply an optional ``--where`` wrap.
     4. Execute (or dry-run) the query.
@@ -37,6 +37,7 @@ __all__ = ["run_query_pipeline"]
 def run_query_pipeline(
     request: QueryRequest,
     *,
+    client: Any | None = None,
     resolvers: Sequence[SqlResolver] | None = None,
     job_store: Any | None = None,
     ignore_archive_errors: bool = False,
@@ -52,6 +53,11 @@ def run_query_pipeline(
     resolution must pass a list that includes
     :class:`qmb.dbt.integration.DbtSqlResolver`. The CLI does this at
     its wiring boundary.
+
+    ``client`` is a ready ``google.cloud.bigquery.Client``. When given it
+    is used as-is (e.g. a server building one per user from that user's
+    credentials); when ``None`` one is created from Application Default
+    Credentials and the request's project/location.
     """
     execution = request.execution
     output = request.output
@@ -59,7 +65,8 @@ def run_query_pipeline(
     if resolvers is None:
         resolvers = [PlainSqlResolver()]
 
-    client = _bq_client.get_client(execution.project, execution.location)
+    if client is None:
+        client = _bq_client.get_client(execution.project, execution.location)
 
     resolved, trace = resolve_request_to_sql(request, resolvers)
     resolved = apply_where(resolved, execution.where)
@@ -70,6 +77,7 @@ def run_query_pipeline(
             resolved,
             dry_run=True,
             max_bytes_billed=execution.max_bytes_billed,
+            labels=execution.labels,
         )
         return ExecutionOutcome(
             resolved=resolved,
@@ -83,6 +91,7 @@ def run_query_pipeline(
         client,
         resolved,
         max_bytes_billed=execution.max_bytes_billed,
+        labels=execution.labels,
     )
 
     exported_path = None

@@ -45,12 +45,14 @@ class _ExecuteRecorder:
         resolved: ResolvedQuery,
         dry_run: bool = False,
         max_bytes_billed: int | None = None,
+        labels: dict[str, str] | None = None,
     ) -> QueryResultHandle:
         self.calls.append({
             "client": client,
             "resolved": resolved,
             "dry_run": dry_run,
             "max_bytes_billed": max_bytes_billed,
+            "labels": labels,
         })
         return self.handle
 
@@ -492,3 +494,16 @@ def test_invalid_format_value_is_a_user_error(monkeypatch) -> None:
     result = CliRunner().invoke(cli.app, ["run", "SELECT 1", "--format", "ndjson"])
     assert result.exit_code != 0
     assert "Invalid format" in result.output
+
+
+def test_labels_are_passed_to_executor(monkeypatch) -> None:
+    execute = _ExecuteRecorder()
+    _install_common_mocks(monkeypatch, execute=execute, tui_started=[])
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["run", "SELECT 1", "--label", "gq_tool=run", "--format", "table"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert execute.calls[0]["labels"] == {"gq_tool": "run"}

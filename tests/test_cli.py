@@ -576,3 +576,60 @@ def test_describe_accepts_bq_style_colon_separator(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     payload = _json.loads(result.output.strip())
     assert payload["kind"] == "table"
+
+
+def test_run_label_options_reach_the_request(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_execute(request, **_kwargs) -> None:
+        captured["request"] = request
+
+    monkeypatch.setattr(cli, "_execute", fake_execute)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["run", "SELECT 1", "--label", "a=b", "--label", "c=d", "--label", "a=z"],
+    )
+
+    assert result.exit_code == 0, result.output
+    request = captured["request"]
+    assert request.labels == {"a": "z", "c": "d"}
+    assert request.execution.labels == {"a": "z", "c": "d"}
+
+
+def test_run_without_labels_has_empty_labels(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_execute(request, **_kwargs) -> None:
+        captured["request"] = request
+
+    monkeypatch.setattr(cli, "_execute", fake_execute)
+
+    result = CliRunner().invoke(cli.app, ["run", "SELECT 1"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["request"].labels == {}
+
+
+def test_run_rejects_invalid_label(monkeypatch) -> None:
+    import json as _json
+
+    from qmb.errors import EXIT_USER_ERROR
+
+    def fail_execute(request, **_kwargs) -> None:
+        raise AssertionError("invalid labels must be rejected before execution")
+
+    monkeypatch.setattr(cli, "_execute", fail_execute)
+
+    for bad, fragment in [
+        ("Upper=v", "'Upper'"),
+        ("novalue", "'novalue'"),
+        ("key=Bad Value", "'Bad Value'"),
+    ]:
+        result = CliRunner().invoke(cli.app, ["run", "SELECT 1", "--label", bad])
+
+        assert result.exit_code == EXIT_USER_ERROR, (bad, result.output)
+        error = _json.loads(result.stderr.strip())["error"]
+        assert error["type"] == "user_error"
+        assert error["details"]["class"] == "BadParameter"
+        assert fragment in error["message"]

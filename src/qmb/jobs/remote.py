@@ -114,15 +114,20 @@ class GcsRemoteArchive:
                     content_type=_content_type_for_artifact(artifact_name),
                 )
 
+        # Job artifacts are uploaded at this point, so manifest/index
+        # failures degrade to warnings instead of failing the export.
+        warnings: list[str] = []
         session_id = effective_session_id(record)
         if session_id is not None:
-            self._update_remote_manifest(session_id, record)
+            try:
+                self._update_remote_manifest(session_id, record)
+            except RemoteArchiveError as exc:
+                warnings.append(f"Remote session manifest update failed: {exc}")
 
-        warning: str | None = None
         try:
             self._upsert_index_entry(_index_entry_for_record(record))
         except RemoteArchiveError as exc:
-            warning = (
+            warnings.append(
                 f"Remote index update failed (run `qmb jobs reindex --remote` to repair): {exc}"
             )
 
@@ -130,7 +135,7 @@ class GcsRemoteArchive:
             qmb_job_id=record.qmb_job_id,
             status="exported",
             uri=f"gs://{self.bucket_name}/{remote_prefix}/",
-            warning=warning,
+            warning="; ".join(warnings) or None,
         )
 
     def import_job(
@@ -444,28 +449,57 @@ class GcsRemoteArchive:
         return job_ids
 
     def _read_remote_manifest(self, session_id: str) -> SessionManifest | None:
+        manifest, _generation = self._read_remote_manifest_with_generation(session_id)
+        return manifest
+
+    def _read_remote_manifest_with_generation(
+        self, session_id: str
+    ) -> tuple[SessionManifest | None, int]:
+        """Return ``(manifest, generation)``; generation 0 means absent."""
         key = self._manifest_key(session_id)
         bucket = self._bucket()
         blob = bucket.blob(key)
         try:
             raw = blob.download_as_text()
         except Exception:
-            return None
+            return None, 0
+        generation = getattr(blob, "generation", None) or 0
         try:
-            return SessionManifest.from_json(raw)
+            return SessionManifest.from_json(raw), generation
         except (ValueError, json.JSONDecodeError):
-            return None
+            return None, generation
 
     def _update_remote_manifest(self, session_id: str, record: Any) -> None:
-        existing = self._read_remote_manifest(session_id)
-        try:
-            updated = update_manifest_with_job(existing, record)
-        except ValueError:
-            return
+        """Merge one job into the remote session manifest, retrying on races.
+
+        Same optimistic-concurrency scheme as :meth:`_upsert_index_entry`:
+        several writers (e.g. server instances) may export into one session
+        at once, so each write is conditional on the generation it read.
+        Raises :class:`RemoteArchiveError` once retries are exhausted.
+        """
+        from google.api_core.exceptions import PreconditionFailed
+
         key = self._manifest_key(session_id)
-        bucket = self._bucket()
-        blob = bucket.blob(key)
-        blob.upload_from_string(updated.to_json(), content_type="application/json")
+        for _attempt in range(INDEX_WRITE_ATTEMPTS):
+            existing, generation = self._read_remote_manifest_with_generation(session_id)
+            try:
+                updated = update_manifest_with_job(existing, record)
+            except ValueError:
+                return
+            bucket = self._bucket()
+            blob = bucket.blob(key)
+            try:
+                blob.upload_from_string(
+                    updated.to_json(),
+                    content_type="application/json",
+                    if_generation_match=generation,
+                )
+                return
+            except PreconditionFailed:
+                continue
+        raise RemoteArchiveError(
+            f"Failed to update remote session manifest {key} after concurrent write retries"
+        )
 
     def _manifest_key(self, session_id: str) -> str:
         return self._join_prefix("sessions", f"{safe_path_segment(session_id)}.json")

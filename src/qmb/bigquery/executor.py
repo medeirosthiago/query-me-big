@@ -1,7 +1,10 @@
 """Execute queries against BigQuery."""
 
+from collections.abc import Mapping
+
 from google.cloud import bigquery
 
+from qmb.bigquery.labels import validate_labels
 from qmb.types import QueryResultHandle, ResolvedQuery
 
 
@@ -10,13 +13,20 @@ def execute_query(
     resolved: ResolvedQuery,
     dry_run: bool = False,
     max_bytes_billed: int | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> QueryResultHandle:
-    """Execute a query and return a handle to the results."""
+    """Execute a query and return a handle to the results.
+
+    ``labels`` are attached to the BigQuery job (dry runs included) after
+    validation against BigQuery's label rules.
+    """
     job_config = bigquery.QueryJobConfig()
     if dry_run:
         job_config.dry_run = True
     if max_bytes_billed is not None:
         job_config.maximum_bytes_billed = max_bytes_billed
+    if labels:
+        job_config.labels = validate_labels(labels)
 
     job = client.query(resolved.sql, job_config=job_config)
 

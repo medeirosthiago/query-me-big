@@ -152,6 +152,7 @@ Run a BigQuery query. Default output: a single JSON object on stdout. Pass
 | `--where CLAUSE` | `-w` | Wrap the resolved SQL in a subquery with this `WHERE`. |
 | `--dry-run` | | Validate + estimate bytes without executing or archiving. |
 | `--max-bytes-billed N` | | BigQuery safety limit (bytes). |
+| `--label KEY=VALUE` | | BigQuery job label (repeatable; later values for the same key win). Keys: 1–63 chars, lowercase letter first, then lowercase letters, digits, `_`, `-`; values: 0–63 of the same. Max 64 labels. Applied to dry runs too. |
 | `--session-id ID` | | Tag this run with an agent/session id. Defaults to `QMB_SESSION_ID`; persisted in the archive. |
 | `--parent-job-id ID` | | Reference a prior qmb job this run derives from. |
 | `--agent NAME` | | Agent/tool name for archive metadata. Defaults to `QMB_AGENT_NAME`. |

@@ -8,7 +8,13 @@ import pytest
 from google.api_core.exceptions import PreconditionFailed
 
 from qmb.jobs.models import EngineMetadata, SourceMetadata
-from qmb.jobs.remote import GcsRemoteArchive, safe_path_segment
+from qmb.jobs.remote import (
+    INDEX_WRITE_ATTEMPTS,
+    REMOTE_ARTIFACT_NAMES,
+    GcsRemoteArchive,
+    _limited_jsonl,
+    safe_path_segment,
+)
 from qmb.jobs.store import JobStore
 from qmb.types import AgentContext, SchemaField
 
@@ -388,6 +394,122 @@ def test_gcs_export_succeeds_when_index_write_exhausts_retries(
     assert result.warning is not None
     assert "index" in result.warning.lower()
     assert "qmb/index.json" not in client.objects
+
+
+def test_gcs_export_retries_session_manifest_write_on_generation_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _seed_job(tmp_path / "first", session_id="shared", nonce="first1")
+    second = _seed_job(tmp_path / "second", session_id="shared", nonce="second")
+    client = FakeClient()
+    remote = GcsRemoteArchive("gs://bucket/qmb", client=client)
+    manifest_key = "qmb/sessions/shared.json"
+
+    real_upload_from_string = FakeBlob.upload_from_string
+    conflicts_remaining = 1
+
+    def racing_upload_from_string(self: FakeBlob, *args: Any, **kwargs: Any) -> None:
+        nonlocal conflicts_remaining
+        if self.name == manifest_key and conflicts_remaining > 0:
+            conflicts_remaining -= 1
+            # Another instance exports ``second`` into the same session between
+            # our read and our conditional write.
+            GcsRemoteArchive("gs://bucket/qmb", client=client)._update_remote_manifest(
+                "shared", second
+            )
+        return real_upload_from_string(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeBlob, "upload_from_string", racing_upload_from_string)
+
+    result = remote.export_job(first)
+
+    assert conflicts_remaining == 0
+    assert result.status == "exported"
+    assert result.warning is None
+    manifest = json.loads(client.objects[manifest_key].decode())
+    # Neither concurrent writer's job is lost.
+    assert sorted(manifest["jobs"]) == sorted([first.qmb_job_id, second.qmb_job_id])
+    assert manifest["count"] == 2
+
+
+def test_gcs_export_succeeds_with_warning_when_manifest_write_exhausts_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _seed_job(tmp_path / "source", session_id="shared")
+    client = FakeClient()
+    remote = GcsRemoteArchive("gs://bucket/qmb", client=client)
+    manifest_key = "qmb/sessions/shared.json"
+
+    real_upload_from_string = FakeBlob.upload_from_string
+    manifest_attempts = 0
+
+    def manifest_always_conflicts(self: FakeBlob, *args: Any, **kwargs: Any) -> None:
+        nonlocal manifest_attempts
+        if self.name == manifest_key:
+            manifest_attempts += 1
+            raise PreconditionFailed("generation mismatch")
+        return real_upload_from_string(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeBlob, "upload_from_string", manifest_always_conflicts)
+
+    result = remote.export_job(record)
+
+    assert result.status == "exported"
+    assert result.warning is not None
+    assert "manifest" in result.warning.lower()
+    assert manifest_attempts == INDEX_WRITE_ATTEMPTS
+    assert manifest_key not in client.objects
+    # Artifacts and the index are still written.
+    prefix = f"qmb/{record.qmb_job_id}"
+    assert all(f"{prefix}/{name}" in client.objects for name in REMOTE_ARTIFACT_NAMES)
+    assert record.qmb_job_id in json.loads(client.objects["qmb/index.json"].decode())["jobs"]
+
+
+def test_gcs_export_manifest_write_is_create_only_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _seed_job(tmp_path / "source", session_id="fresh")
+    client = FakeClient()
+    remote = GcsRemoteArchive("gs://bucket/qmb", client=client)
+    manifest_key = "qmb/sessions/fresh.json"
+
+    real_upload_from_string = FakeBlob.upload_from_string
+    seen_generations: list[int | None] = []
+
+    def recording_upload(self: FakeBlob, *args: Any, **kwargs: Any) -> None:
+        if self.name == manifest_key:
+            seen_generations.append(kwargs.get("if_generation_match"))
+        return real_upload_from_string(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeBlob, "upload_from_string", recording_upload)
+
+    remote.export_job(record)
+    remote.export_job(record)
+
+    assert seen_generations == [0, 1]
+
+
+def test_gcs_export_with_zero_preview_rows_uploads_empty_preview(tmp_path: Path) -> None:
+    record = _seed_job(tmp_path / "source")
+    client = FakeClient()
+    remote = GcsRemoteArchive("gs://bucket/qmb", client=client)
+
+    result = remote.export_job(record, preview_rows=0)
+
+    prefix = f"qmb/{record.qmb_job_id}"
+    assert result.status == "exported"
+    assert client.objects[f"{prefix}/preview.jsonl"] == b""
+    for name in ("metadata.json", "query.sql", "schema.json"):
+        assert client.objects[f"{prefix}/{name}"] == (record.directory / name).read_bytes()
+    # The local archive keeps its rows; only the remote copy is empty.
+    assert (record.directory / "preview.jsonl").read_text(encoding="utf-8") != ""
+
+
+def test_limited_jsonl_with_zero_rows_is_empty(tmp_path: Path) -> None:
+    path = tmp_path / "preview.jsonl"
+    path.write_text('{"id": 1}\n{"id": 2}\n', encoding="utf-8")
+
+    assert _limited_jsonl(path, 0) == ""
 
 
 def test_gcs_list_jobs_returns_index_entries(tmp_path: Path) -> None:

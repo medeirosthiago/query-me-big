@@ -234,6 +234,22 @@ def _parse_agent_metadata(meta_list: list[str] | None) -> dict[str, Any]:
     return _parse_key_value_pairs(meta_list, option_name="--meta")
 
 
+def _parse_labels(label_list: list[str] | None) -> dict[str, str]:
+    """Parse and validate --label key=value pairs (values stay strings; later wins)."""
+    from qmb.bigquery.labels import validate_labels
+
+    labels: dict[str, str] = {}
+    for item in label_list or []:
+        if "=" not in item:
+            raise typer.BadParameter(f"Invalid --label format: '{item}'. Use key=value.")
+        key, _, value = item.partition("=")
+        labels[key.strip()] = value.strip()
+    try:
+        return validate_labels(labels)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+
+
 @app.command()
 def run(
     query: Annotated[
@@ -389,6 +405,13 @@ def run(
         int | None,
         typer.Option("--max-bytes-billed", help="Maximum bytes billed safety limit"),
     ] = None,
+    label: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--label",
+            help="BigQuery job label key=value (repeatable; later values win).",
+        ),
+    ] = None,
     where: Annotated[
         str | None,
         typer.Option("--where", "-w", help="WHERE clause appended to the resolved SQL"),
@@ -484,6 +507,7 @@ def run(
     from qmb.agent import build_agent_context, effective_session_id
 
     variables = _parse_vars(var)
+    labels = _parse_labels(label)
     agent_metadata = _parse_agent_metadata(meta)
     session_id = effective_session_id(session_id)
     agent_context = build_agent_context(
@@ -514,6 +538,7 @@ def run(
         dry_run=dry_run,
         max_bytes_billed=max_bytes_billed,
         where=where,
+        labels=labels,
         session_id=session_id,
         parent_job_id=parent_job_id,
         agent_context=agent_context,
@@ -1490,39 +1515,15 @@ def describe(
     the table ids inside it (sorted alphabetically, case-insensitive).
     Use this in place of ``bq show --format prettyjson``.
     """
-    from qmb.bigquery.catalog import (
-        get_dataset_metadata,
-        get_table_metadata,
-        list_dataset_tables,
-    )
+    from qmb.application.catalog import describe_target
     from qmb.bigquery.client import get_client
 
     client = get_client(project, location)
 
-    # ``dataset`` vs ``dataset.table`` — colons are also accepted as a
-    # convenience (``project:dataset.table`` is BigQuery's own shorthand).
-    normalized = target.replace(":", ".")
-    parts = normalized.split(".")
-    if len(parts) == 1:
-        dataset = get_dataset_metadata(client, parts[0])
-        payload = {
-            "kind": "dataset",
-            "dataset": dataset.to_api_repr(),
-            "tables": list(list_dataset_tables(client, parts[0])),
-        }
-    elif len(parts) == 2:
-        table = get_table_metadata(client, parts[0], parts[1])
-        payload = {"kind": "table", "table": table.to_api_repr()}
-    elif len(parts) == 3:
-        # project.dataset.table — honor it but require the configured
-        # client's project for now; cross-project describe is out of scope.
-        table = get_table_metadata(client, parts[1], parts[2])
-        payload = {"kind": "table", "table": table.to_api_repr()}
-    else:
-        raise typer.BadParameter(
-            f"Cannot parse target {target!r}. "
-            "Use 'dataset' or 'dataset.table'."
-        )
+    try:
+        payload = describe_target(client, target)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
 
     typer.echo(json.dumps(payload))
 
@@ -1655,89 +1656,24 @@ def _browse_print_json(
     stderr. stdout JSON is unchanged so ``| jq`` still works.
     """
     import sys
-    import time as _time
 
-    from qmb.bigquery.catalog import build_table_index, list_dataset_ids
-    from qmb.bigquery.catalog_search import filter_browser_matches
+    from qmb.application.catalog import browse_catalog
 
     def _stamp(label: str, seconds: float, extra: str = "") -> None:
-        if not time_steps:
-            return
         suffix = f"  {extra}" if extra else ""
         print(f"[time] {label}: {seconds * 1000:8.1f} ms{suffix}", file=sys.stderr)
 
-    t0 = _time.perf_counter()
-
-    if pattern is None:
-        # Cheap path: just the dataset list, no per-dataset table fetch.
-        dataset_ids = list_dataset_ids(client)
-        _stamp("list_dataset_ids", _time.perf_counter() - t0, f"n={len(dataset_ids)}")
-        payload = {
-            "project": getattr(client, "project", None) or project,
-            "datasets": dataset_ids,
-        }
-        typer.echo(json.dumps(payload))
-        return
-
-    if legacy_list_tables:
-        t_ds = _time.perf_counter()
-        dataset_ids = list_dataset_ids(client)
-        _stamp("list_dataset_ids", _time.perf_counter() - t_ds, f"n={len(dataset_ids)}")
-
-        t1 = _time.perf_counter()
-        tables_by_dataset = build_table_index(
-            client, dataset_ids, max_workers=workers
-        )
-        total_tables = sum(len(v) for v in tables_by_dataset.values())
-        _stamp(
-            "build_table_index",
-            _time.perf_counter() - t1,
-            f"datasets={len(tables_by_dataset)} tables={total_tables} workers={workers}",
-        )
-    else:
-        from qmb.bigquery.catalog_information_schema import (
-            list_tables_via_information_schema,
-        )
-
-        # If --location is given, pin to a single region (skip
-        # auto-discovery). Otherwise discover regions from list_datasets
-        # so multi-region projects are handled correctly.
-        explicit_location = location or getattr(client, "location", None)
-        pinned_locations = [explicit_location] if explicit_location else None
-
-        t1 = _time.perf_counter()
-        tables_by_dataset = list_tables_via_information_schema(
-            client,
-            project=project,
-            locations=pinned_locations,
-            refresh_cache=refresh_regions,
-        )
-        total_tables = sum(len(v) for v in tables_by_dataset.values())
-        _stamp(
-            "list_tables_via_information_schema",
-            _time.perf_counter() - t1,
-            f"datasets={len(tables_by_dataset)} tables={total_tables} "
-            f"locations={pinned_locations or 'auto'}",
-        )
-        dataset_ids = sorted(tables_by_dataset.keys(), key=str.lower)
-
-    t2 = _time.perf_counter()
-    matches = filter_browser_matches(dataset_ids, tables_by_dataset, pattern)
-    _stamp(
-        "filter_browser_matches",
-        _time.perf_counter() - t2,
-        f"matches={len(matches)}",
+    payload = browse_catalog(
+        client,
+        pattern,
+        project=project,
+        location=location,
+        workers=workers,
+        legacy_list_tables=legacy_list_tables,
+        refresh_regions=refresh_regions,
+        on_step=_stamp if time_steps else None,
     )
-
-    payload = {
-        "project": getattr(client, "project", None) or project,
-        "pattern": pattern,
-        "matches": [
-            {"dataset_id": m.dataset_id, "tables": list(m.tables)} for m in matches
-        ],
-    }
     typer.echo(json.dumps(payload))
-    _stamp("total", _time.perf_counter() - t0)
 
 
 def _execute(
