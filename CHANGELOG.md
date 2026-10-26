@@ -11,6 +11,23 @@ behavior changes are called out explicitly).
 
 _No released changes yet._
 
+## [0.11.0] - 2026-10-26
+
+### Fixed
+
+- `describe` honors the project in `project.dataset.table` instead of
+  dropping it and describing the client's project.
+- `browse` inspects the requested `--project` (datasets, per-dataset listing
+  and INFORMATION_SCHEMA) instead of the client's project, and reports that
+  project. Jobs still run in the client's project.
+
+### Added
+
+- `describe` accepts `project:dataset` (a dataset in another project).
+- The `qmb.bigquery.catalog` helpers (`list_dataset_ids`, `list_dataset_tables`,
+  `build_table_index`, `get_dataset_metadata`, `get_table_metadata`) take an
+  optional `project` that overrides `client.project`.
+
 ## [0.10.0] - 2026-10-24
 
 ### Added

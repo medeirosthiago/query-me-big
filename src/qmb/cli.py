@@ -1493,8 +1493,9 @@ def describe(
         str,
         typer.Argument(
             help=(
-                "A dataset (``my_dataset``) or fully-qualified table "
-                "(``my_dataset.my_table``) to inspect."
+                "A dataset (``my_dataset``) or table (``my_dataset.my_table``) to "
+                "inspect. Use ``project.dataset.table``, ``project:dataset`` or "
+                "``project:dataset.table`` for another project."
             ),
         ),
     ],
@@ -1514,6 +1515,10 @@ def describe(
     and so on. For a dataset target, a top-level ``tables`` array lists
     the table ids inside it (sorted alphabetically, case-insensitive).
     Use this in place of ``bq show --format prettyjson``.
+
+    Targets in other projects are supported: ``project.dataset.table``,
+    ``project:dataset`` and ``project:dataset.table``. Without a project
+    the client's project is used.
     """
     from qmb.application.catalog import describe_target
     from qmb.bigquery.client import get_client

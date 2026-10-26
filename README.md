@@ -182,7 +182,7 @@ stale unless the project starts using a brand-new region.
 | Flag | Short | Description |
 |---|---|---|
 | `PATTERN` (positional) | | Fuzzy match (e.g. `orders`) or glob (e.g. `analytics_*`). |
-| `--project ID` | | GCP project ID. |
+| `--project ID` | | GCP project to inspect (and to run jobs in). Datasets in a project other than the client's can be browsed if you have access. |
 | `--location US\|EU\|...` | | Pin INFORMATION_SCHEMA queries to one region (skips multi-region auto-discovery; may miss datasets in other regions). |
 | `--tui` | `-t` | Open the interactive browser pane instead of printing JSON. |
 | `--refresh-regions` | | Ignore the cached region list and re-discover from `list_datasets`. The fresh value is written back to the cache. Use after your project starts using a new region. |
@@ -202,7 +202,7 @@ clustering, sizes, timestamps, labels, descriptions, ...).
 
 | Flag | Description |
 |---|---|
-| `TARGET` (positional, required) | `dataset` or `dataset.table`. The BQ-native `project:dataset.table` shorthand is also accepted. |
+| `TARGET` (positional, required) | `dataset`, `dataset.table` or `project.dataset.table`. The BQ-native `project:dataset` and `project:dataset.table` shorthands are also accepted. Without a project, `--project` / the default project is used. |
 | `--project ID` | GCP project ID. |
 | `--location US\|EU\|...` | BigQuery location. |
 
