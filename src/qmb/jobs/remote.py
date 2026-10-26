@@ -618,6 +618,7 @@ def collapse_excerpt(text: str) -> str:
 
 
 def _index_entry_for_record(record: Any) -> dict[str, Any]:
+    agent = record.agent_context
     return {
         "qmb_job_id": record.qmb_job_id,
         "session_id": effective_session_id(record),
@@ -627,6 +628,9 @@ def _index_entry_for_record(record: Any) -> dict[str, Any]:
         "total_rows": record.total_rows,
         "bytes_processed": record.bytes_processed,
         "query_excerpt": collapse_excerpt(record.query_path.read_text(encoding="utf-8")),
+        "agent_name": agent.name if agent is not None else None,
+        "user": agent.user if agent is not None else None,
+        "task": agent.task if agent is not None else None,
     }
 
 
@@ -634,7 +638,8 @@ def _index_entry_from_metadata(metadata: dict[str, Any], query_text: str) -> dic
     stats = metadata.get("stats") or {}
     source = metadata.get("source") or {}
     engine = metadata.get("engine") or {}
-    session_id = metadata.get("session_id") or (metadata.get("agent") or {}).get("session_id")
+    agent = metadata.get("agent") or {}
+    session_id = metadata.get("session_id") or agent.get("session_id")
     return {
         "qmb_job_id": metadata.get("qmb_job_id"),
         "session_id": session_id,
@@ -644,4 +649,7 @@ def _index_entry_from_metadata(metadata: dict[str, Any], query_text: str) -> dic
         "total_rows": stats.get("total_rows", 0),
         "bytes_processed": stats.get("bytes_processed", 0),
         "query_excerpt": collapse_excerpt(query_text),
+        "agent_name": agent.get("name"),
+        "user": agent.get("user"),
+        "task": agent.get("task"),
     }

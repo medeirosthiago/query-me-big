@@ -810,3 +810,162 @@ def test_jobs_reindex_remote_requires_destination(monkeypatch: pytest.MonkeyPatc
 
     assert result.exit_code != 0
     assert "not configured" in (result.output + result.stderr)
+
+
+# -- Named archives (--archive) ----------------------------------------------
+
+ARCHIVES_CONFIG = """
+[remote_archive]
+uri = "gs://bucket/qmb/"
+name = "qmb"
+
+[[remote_archives]]
+name = "mcp"
+uri = "gs://bucket/mcp/production/"
+"""
+
+
+@pytest.fixture
+def archives_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from qmb import config
+
+    path = tmp_path / "config.toml"
+    path.write_text(ARCHIVES_CONFIG, encoding="utf-8")
+    monkeypatch.setattr(config, "default_config_path", lambda: path)
+
+
+def test_jobs_show_archive_imports_from_named_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, archives_config: None
+) -> None:
+    import shutil
+
+    jobs_root = tmp_path / "jobs"
+    _first, remote_record = _seed_jobs(tmp_path / "remote-source")
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    destinations: list[str] = []
+
+    class FakeRemote:
+        def import_job(self, job_id: str, store: Any, *, overwrite: bool = False) -> Any:
+            store.root.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(remote_record.directory, store.root / remote_record.qmb_job_id)
+            return _FakeRemoteResult(remote_record.qmb_job_id, "imported")
+
+    def fake_remote(destination: str) -> FakeRemote:
+        destinations.append(destination)
+        return FakeRemote()
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", fake_remote)
+
+    result = CliRunner().invoke(
+        cli.app, ["jobs", "show", "def222", "--archive", "mcp", "--format", "json"]
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert destinations == ["gs://bucket/mcp/production/"]
+    assert "importing remote job def222 from gs://bucket/mcp/production/" in result.stderr
+    assert json.loads(result.stdout)["qmb_job_id"] == remote_record.qmb_job_id
+
+
+def test_jobs_show_without_archive_keeps_using_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, archives_config: None
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    destinations: list[str] = []
+
+    class FakeRemote:
+        def import_job(self, job_id: str, store: Any, *, overwrite: bool = False) -> Any:
+            raise RuntimeError("not here")
+
+    def fake_remote(destination: str) -> FakeRemote:
+        destinations.append(destination)
+        return FakeRemote()
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", fake_remote)
+
+    result = CliRunner().invoke(cli.app, ["jobs", "sql", "missing"])
+
+    assert result.exit_code != 0
+    assert destinations == ["gs://bucket/qmb/"]
+
+
+def test_jobs_import_archive_reads_from_named_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, archives_config: None
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    calls: list[tuple[str, str]] = []
+
+    class FakeRemote:
+        def __init__(self, destination: str) -> None:
+            self.destination = destination
+
+        def import_job(self, job_id: str, store: Any, *, overwrite: bool = False) -> Any:
+            calls.append((self.destination, job_id))
+            return _FakeRemoteResult(job_id, "imported")
+
+        def export_job(self, *args: Any, **kwargs: Any) -> Any:
+            pytest.fail("importing must never write to the archive")
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", FakeRemote)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["jobs", "import", "qmb_gq_job", "--archive", "mcp", "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert calls == [("gs://bucket/mcp/production/", "qmb_gq_job")]
+    assert json.loads(result.output)["destination"] == "gs://bucket/mcp/production/"
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["jobs", "import", "x", "--archive", "nope"], "Unknown remote archive 'nope'"),
+        (["jobs", "show", "x", "--archive", "nope"], "Unknown remote archive 'nope'"),
+        (
+            ["jobs", "paths", "x", "--archive", "mcp", "--destination", "gs://b/p/"],
+            "either --archive or --destination",
+        ),
+    ],
+)
+def test_jobs_archive_option_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    archives_config: None,
+    args: list[str],
+    message: str,
+) -> None:
+    monkeypatch.setenv("QMB_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setattr(
+        "qmb.jobs.remote.get_remote_archive",
+        lambda destination: pytest.fail("no archive should be contacted"),
+    )
+
+    result = CliRunner().invoke(cli.app, args)
+
+    assert result.exit_code != 0
+    assert message in " ".join((result.output + result.stderr).split())
+
+
+def test_jobs_export_ignores_extra_archives(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, archives_config: None
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    first, _second = _seed_jobs(jobs_root)
+    monkeypatch.setenv("QMB_JOBS_DIR", str(jobs_root))
+    destinations: list[str] = []
+
+    class FakeRemote:
+        def export_job(self, record: Any, *, preview_rows: int | None = None) -> Any:
+            return _FakeRemoteResult(record.qmb_job_id, "exported")
+
+    def fake_remote(destination: str) -> FakeRemote:
+        destinations.append(destination)
+        return FakeRemote()
+
+    monkeypatch.setattr("qmb.jobs.remote.get_remote_archive", fake_remote)
+
+    result = CliRunner().invoke(cli.app, ["jobs", "export", first.qmb_job_id])
+
+    assert result.exit_code == 0, result.output + result.stderr
+    assert destinations == ["gs://bucket/qmb/"]

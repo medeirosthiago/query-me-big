@@ -1,3 +1,4 @@
+import { archivesOf, itemKey } from "./archives";
 import type { JobSummary, Origin, SessionSummary } from "./types";
 
 /**
@@ -6,20 +7,37 @@ import type { JobSummary, Origin, SessionSummary } from "./types";
  * predate manifest support, a failed manifest write, or a remote job whose
  * manifest wasn't exported). Marked `derived: true` so the UI can flag them
  * and suggest `qmb jobs reindex`.
+ *
+ * Sessions are per archive: `knownKeys` holds `itemKey(archive, id)` for
+ * every archive a known session lives in (see `knownSessionKeys`).
  */
 export function deriveMissingSessions(
   jobs: JobSummary[],
-  knownSessionIds: ReadonlySet<string>,
+  knownKeys: ReadonlySet<string>,
 ): SessionSummary[] {
   const jobsBySession = new Map<string, JobSummary[]>();
   for (const job of jobs) {
-    if (!job.session_id || knownSessionIds.has(job.session_id)) continue;
-    const list = jobsBySession.get(job.session_id);
+    const sessionId = job.session_id;
+    if (!sessionId) continue;
+    if (archivesOf(job).some((archive) => knownKeys.has(itemKey(archive, sessionId)))) {
+      continue;
+    }
+    const key = itemKey(job.archive, sessionId);
+    const list = jobsBySession.get(key);
     if (list) list.push(job);
-    else jobsBySession.set(job.session_id, [job]);
+    else jobsBySession.set(key, [job]);
   }
-  return [...jobsBySession.entries()].map(([sessionId, sessionJobs]) =>
-    deriveSession(sessionId, sessionJobs),
+  return [...jobsBySession.values()].map((sessionJobs) =>
+    deriveSession(sessionJobs[0].session_id!, sessionJobs),
+  );
+}
+
+/** Keys for every archive each session lives in, for `deriveMissingSessions`. */
+export function knownSessionKeys(sessions: SessionSummary[]): Set<string> {
+  return new Set(
+    sessions.flatMap((session) =>
+      archivesOf(session).map((archive) => itemKey(archive, session.session_id)),
+    ),
   );
 }
 
@@ -36,8 +54,14 @@ function deriveSession(sessionId: string, jobs: JobSummary[]): SessionSummary {
     agents: uniqueSorted(sorted.map((job) => job.agent?.name)),
     tasks: uniqueSorted(sorted.map((job) => job.agent?.task)),
     cwds: uniqueSorted(sorted.map((job) => job.agent?.cwd)),
+    users: uniqueSorted(sorted.map((job) => job.user)),
     updated_at: sorted[0]?.created_at ?? null,
     origin: mergeOrigins(sorted.map((job) => job.origin)),
+    archive: sorted[0].archive,
+    also_in: sorted[0].also_in,
+    agent_name: sorted.find((job) => job.agent_name)?.agent_name ?? null,
+    user: sorted.find((job) => job.user)?.user ?? null,
+    task: sorted.find((job) => job.task)?.task ?? null,
     derived: true,
   };
 }
