@@ -181,9 +181,6 @@
   --badge-remote: var(--ctp-peach);
   --badge-remote-bg: color-mix(in srgb, var(--ctp-peach) 18%, var(--bg));
   --badge-remote-border: color-mix(in srgb, var(--ctp-peach) 50%, var(--border));
-  --badge-both: var(--ctp-blue);
-  --badge-both-bg: color-mix(in srgb, var(--ctp-blue) 18%, var(--bg));
-  --badge-both-border: color-mix(in srgb, var(--ctp-blue) 50%, var(--border));
   --badge-derived: var(--ctp-yellow);
   --badge-derived-bg: color-mix(in srgb, var(--ctp-yellow) 18%, var(--bg));
   --badge-derived-border: color-mix(in srgb, var(--ctp-yellow) 50%, var(--border));
@@ -318,6 +315,44 @@ a {
   }
 }
 
+.filters {
+  display: flex;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.filter__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.filter__select {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.filter__select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
@@ -406,8 +441,26 @@ a {
   color: var(--text-faint);
 }
 
+/* Date and size never wrap; agent/person and session shrink with an ellipsis. */
+.row__meta > span {
+  flex: none;
+  white-space: nowrap;
+}
+
+.row__meta > .row__agent,
+.row__meta > .row__session {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .row__session {
   font-family: var(--mono);
+}
+
+.row__agent {
+  color: var(--text-dim);
 }
 
 .list-footer {
@@ -450,10 +503,42 @@ a {
   border-color: var(--badge-remote-border);
 }
 
-.badge--both {
-  color: var(--badge-both);
-  background: var(--badge-both-bg);
-  border-color: var(--badge-both-border);
+/* Remote archives show their configured name as typed (local stays LOCAL).
+   The primary archive keeps the peach "remote" colour; each extra archive
+   gets a stable hue picked from its name (see `archiveBadgeClass`). */
+.badge--remote,
+[class*="badge--hue-"] {
+  text-transform: none;
+}
+
+[class*="badge--hue-"] {
+  color: var(--badge-hue);
+  background: color-mix(in srgb, var(--badge-hue) 18%, var(--bg));
+  border-color: color-mix(in srgb, var(--badge-hue) 50%, var(--border));
+}
+
+.badge--hue-0 {
+  --badge-hue: var(--ctp-mauve);
+}
+
+.badge--hue-1 {
+  --badge-hue: var(--ctp-teal);
+}
+
+.badge--hue-2 {
+  --badge-hue: var(--ctp-pink);
+}
+
+.badge--hue-3 {
+  --badge-hue: var(--ctp-sapphire);
+}
+
+.badge--hue-4 {
+  --badge-hue: var(--ctp-maroon);
+}
+
+.badge--hue-5 {
+  --badge-hue: var(--ctp-lavender);
 }
 
 .badge--derived {
@@ -510,6 +595,14 @@ a {
   border-radius: 6px;
   padding: 8px 12px;
   margin-bottom: 16px;
+}
+
+.banner--warning {
+  background: var(--bg-raised);
+  border: 1px dashed var(--notice-border);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px 12px;
 }
 
 .notice {
@@ -597,6 +690,22 @@ a {
 .field__value {
   font-size: 12.5px;
   word-break: break-word;
+}
+
+.field__list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.json-block {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 .detail__section {

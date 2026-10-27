@@ -1,17 +1,38 @@
 import type { JSX } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { fetchArchiveSearch, fetchIndex, fetchSessionDetail } from "./api";
+import {
+  fetchArchiveIndex,
+  fetchArchives,
+  fetchArchiveSearch,
+  fetchIndex,
+  fetchSessionDetail,
+} from "./api";
+import {
+  ALL,
+  LOCAL_ARCHIVE,
+  UNKNOWN_AGENT,
+  agentLabel,
+  agentOptions,
+  archivesOf,
+  filterJobs,
+  filterSessions,
+  itemKey,
+  sharesArchive,
+} from "./archives";
+import { ArchiveBadges } from "./components/ArchiveBadges";
 import { Banner } from "./components/Banner";
 import { Icon } from "./components/Icon";
 import { JobDetail } from "./components/JobDetail";
 import { SessionDetail } from "./components/SessionDetail";
-import { deriveMissingSessions } from "./deriveSessions";
+import { deriveMissingSessions, knownSessionKeys } from "./deriveSessions";
 import { fmtBytes, fmtDate } from "./format";
 import { mergeIndex } from "./mergeIndex";
 import { extractSessionToken, searchJobs, searchSessions } from "./search";
 import type {
+  ArchiveStatus,
   IndexResponse,
   JobSummary,
+  SearchMatch,
   SearchPeriod,
   SearchTarget,
   SessionSummary,
@@ -24,10 +45,10 @@ const ROWS_PER_PAGE = 100;
 const SCROLL_LOAD_THRESHOLD_PX = 200;
 const SEARCH_DEBOUNCE_MS = 200;
 type Tab = "jobs" | "sessions";
-type Selected = { type: "job"; id: string } | { type: "session"; id: string } | null;
+type Selected = { type: "job" | "session"; archive: string; id: string } | null;
 type ArchiveSearchState = {
   query: string;
-  jobIds: string[];
+  matches: SearchMatch[];
   status: string;
 };
 
@@ -134,30 +155,82 @@ function useHoldToggle(onClick: () => void, onHold: () => void, holdMs = HOLD_MS
   };
 }
 
+type Warning = { message: string; tone: "error" | "warning" };
+
+/** Stand-in payload for an archive whose index request failed outright. */
+function failedArchivePayload(
+  archive: ArchiveStatus,
+  message: string,
+  previous: IndexResponse | undefined,
+): IndexResponse {
+  return {
+    generated_at: previous?.generated_at ?? new Date().toISOString(),
+    jobs: previous?.jobs ?? [],
+    sessions: previous?.sessions ?? [],
+    archives: [{ ...archive, status: "error", error: message }],
+  };
+}
+
+/** `reindex --remote` targets the primary by default; extra archives need their URI. */
+function reindexCommand(archive: string, archives: ArchiveStatus[]): string {
+  const status = archives.find((a) => a.name === archive);
+  if (!status || status.primary) return "qmb jobs reindex --remote";
+  return `qmb jobs reindex --remote --destination ${status.uri}`;
+}
+
+/**
+ * The item with `id` in `archives[0]`, else one living in any of `archives`
+ * (a local item merged with an archive copy is listed once, under `local`).
+ */
+function findItem<T extends { archive: string; also_in?: string[] }>(
+  items: T[],
+  archives: string[],
+  id: string,
+  idOf: (item: T) => string,
+): T | undefined {
+  return (
+    items.find((item) => item.archive === archives[0] && idOf(item) === id) ??
+    items.find(
+      (item) => idOf(item) === id && archivesOf(item).some((a) => archives.includes(a)),
+    )
+  );
+}
+
+function isSelected(selected: Selected, type: "job" | "session", archive: string, id: string) {
+  return selected?.type === type && selected.archive === archive && selected.id === id;
+}
+
+const jobId = (job: JobSummary) => job.qmb_job_id;
+const sessionId = (session: SessionSummary) => session.session_id;
+
 export function App() {
   const { theme, toggle: toggleTheme, setAuto } = useTheme();
   const holdToggle = useHoldToggle(toggleTheme, setAuto);
 
   // Two-phase load: `localIndex` arrives fast (local-scan time only) and
-  // renders immediately; `remoteIndex` arrives later in the background and
-  // is merged in client-side once it lands (see `mergeIndex`).
+  // renders immediately; each remote archive's half arrives later in the
+  // background and is merged in client-side once it lands (see `mergeIndex`).
   const [localIndex, setLocalIndex] = useState<IndexResponse | null>(null);
-  const [remoteIndex, setRemoteIndex] = useState<IndexResponse | null>(null);
+  const [archiveList, setArchiveList] = useState<ArchiveStatus[]>([]);
+  const [remoteIndexes, setRemoteIndexes] = useState<Record<string, IndexResponse>>({});
+  const [archivesError, setArchivesError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [dismissedRemoteError, setDismissedRemoteError] = useState<string | null>(null);
-  const [dismissedIndexStale, setDismissedIndexStale] = useState<number | null>(null);
+  // Dismissed warning messages; a different message (e.g. a new error) shows again.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   // Full session detail (agents/tasks/cwds) fetched on-demand for remote
-  // sessions, keyed by session id, overriding the derived summary once it
-  // resolves. See the effect below and `openSession`.
+  // sessions, keyed by `itemKey(archive, session_id)`, overriding the derived
+  // summary once it resolves. See the effect below and `openSession`.
   const [sessionOverrides, setSessionOverrides] = useState<Record<string, SessionSummary>>({});
-  // Session ids whose on-demand remote detail fetch failed — the derived
+  // Sessions whose on-demand remote detail fetch failed — the derived
   // placeholder stays displayed, but the detail view notes it's a fallback.
   const [sessionFetchFailed, setSessionFetchFailed] = useState<Record<string, boolean>>({});
 
   const [tab, setTab] = useState<Tab>("sessions");
   const [query, setQuery] = useState("");
+  const [archiveFilter, setArchiveFilter] = useState(ALL);
+  const [agentFilter, setAgentFilter] = useState(ALL);
   const [archiveSearch, setArchiveSearch] = useState<ArchiveSearchState | null>(null);
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState<Selected>(null);
@@ -169,6 +242,7 @@ export function App() {
   function load(refresh: boolean) {
     if (refresh) setRefreshing(true);
     setRemoteLoading(true);
+    setDismissed(new Set());
     setSessionOverrides({});
     setSessionFetchFailed({});
 
@@ -179,20 +253,26 @@ export function App() {
       })
       .catch((err: Error) => setLoadError(err.message));
 
-    const remoteDone = fetchIndex("remote", { refresh })
-      .then((data) => {
-        setRemoteIndex(data);
-        setDismissedRemoteError(null);
-        setDismissedIndexStale(null);
+    // Each archive loads (and fails) on its own, so a slow bucket never
+    // holds up the others.
+    const remoteDone = fetchArchives()
+      .then((archives) => {
+        setArchiveList(archives);
+        setArchivesError(null);
+        return Promise.allSettled(
+          archives.map((archive) =>
+            fetchArchiveIndex(archive.name, { refresh })
+              .then((data) => setRemoteIndexes((prev) => ({ ...prev, [archive.name]: data })))
+              .catch((err: Error) =>
+                setRemoteIndexes((prev) => ({
+                  ...prev,
+                  [archive.name]: failedArchivePayload(archive, err.message, prev[archive.name]),
+                })),
+              ),
+          ),
+        );
       })
-      .catch((err: Error) =>
-        setRemoteIndex((prev) => ({
-          generated_at: prev?.generated_at ?? new Date().toISOString(),
-          jobs: prev?.jobs ?? [],
-          sessions: prev?.sessions ?? [],
-          remote_error: err.message,
-        })),
-      )
+      .catch((err: Error) => setArchivesError(err.message))
       .finally(() => setRemoteLoading(false));
 
     if (refresh) Promise.allSettled([localDone, remoteDone]).finally(() => setRefreshing(false));
@@ -200,7 +280,16 @@ export function App() {
 
   useEffect(() => load(false), []);
 
-  const index = useMemo(() => mergeIndex(localIndex, remoteIndex), [localIndex, remoteIndex]);
+  const primaryArchive = archiveList.find((archive) => archive.primary)?.name ?? null;
+
+  const index = useMemo(
+    () =>
+      mergeIndex(
+        localIndex,
+        archiveList.flatMap((archive) => remoteIndexes[archive.name] ?? []),
+      ),
+    [localIndex, archiveList, remoteIndexes],
+  );
 
   // Jobs can reference a `session_id` absent from the manifest-backed
   // `sessions` array (pre-manifest jobs, a failed manifest write, or an
@@ -209,12 +298,24 @@ export function App() {
   // silently diverge from the Jobs tab.
   const allSessions = useMemo(() => {
     if (!index) return [];
-    const knownIds = new Set(index.sessions.map((s) => s.session_id));
-    const derived = deriveMissingSessions(index.jobs, knownIds);
+    const derived = deriveMissingSessions(index.jobs, knownSessionKeys(index.sessions));
     const base = derived.length > 0 ? [...index.sessions, ...derived] : index.sessions;
     if (Object.keys(sessionOverrides).length === 0) return base;
-    return base.map((s) => sessionOverrides[s.session_id] ?? s);
+    return base.map((s) => sessionOverrides[itemKey(s.archive, s.session_id)] ?? s);
   }, [index, sessionOverrides]);
+
+  const scopedJobs = useMemo(
+    () => (index ? filterJobs(index.jobs, archiveFilter, agentFilter) : []),
+    [index, archiveFilter, agentFilter],
+  );
+  const scopedSessions = useMemo(
+    () => filterSessions(allSessions, archiveFilter, agentFilter),
+    [allSessions, archiveFilter, agentFilter],
+  );
+  const agentChoices = useMemo(
+    () => (index ? agentOptions(index.jobs, allSessions) : []),
+    [index, allSessions],
+  );
 
   const searchText = extractSessionToken(query).rest.trim();
 
@@ -233,10 +334,10 @@ export function App() {
       ["older", "sql", "searching older SQL…"],
       ["older", "preview", "searching older previews…"],
     ];
-    setArchiveSearch({ query, jobIds: [], status: "searching recent SQL…" });
+    setArchiveSearch({ query, matches: [], status: "searching recent SQL…" });
 
     const timer = window.setTimeout(async () => {
-      const found = new Set<string>();
+      const found = new Map<string, SearchMatch>();
       try {
         for (const [period, target, status] of stages) {
           setArchiveSearch((current) =>
@@ -246,10 +347,12 @@ export function App() {
             sessionId,
             signal: controller.signal,
           });
-          for (const id of result.job_ids) found.add(id);
+          for (const match of result.matches) {
+            found.set(itemKey(match.archive, match.qmb_job_id), match);
+          }
           setArchiveSearch((current) =>
             current?.query === query
-              ? { query, jobIds: [...found], status }
+              ? { query, matches: [...found.values()], status }
               : current,
           );
         }
@@ -273,17 +376,23 @@ export function App() {
 
   const filteredJobs = useMemo(() => {
     if (!index) return [];
-    if (!searchText) return searchJobs(index.jobs, query);
+    if (!searchText) return searchJobs(scopedJobs, query);
     if (archiveSearch?.query !== query) return [];
-    const jobsById = new Map(index.jobs.map((job) => [job.qmb_job_id, job]));
-    return archiveSearch.jobIds.flatMap((id) => {
-      const job = jobsById.get(id);
-      return job ? [job] : [];
+    const jobsByKey = new Map<string, JobSummary>();
+    for (const job of scopedJobs) {
+      for (const archive of archivesOf(job)) jobsByKey.set(itemKey(archive, job.qmb_job_id), job);
+    }
+    const seen = new Set<JobSummary>();
+    return archiveSearch.matches.flatMap((match) => {
+      const job = jobsByKey.get(itemKey(match.archive, match.qmb_job_id));
+      if (!job || seen.has(job)) return [];
+      seen.add(job);
+      return [job];
     });
-  }, [index, query, searchText, archiveSearch]);
+  }, [index, scopedJobs, query, searchText, archiveSearch]);
   const filteredSessions = useMemo(
-    () => searchSessions(allSessions, query),
-    [allSessions, query],
+    () => searchSessions(scopedSessions, query),
+    [scopedSessions, query],
   );
   const totalCount = tab === "jobs" ? filteredJobs.length : filteredSessions.length;
   // `renderCount` caps how many rows are actually mounted; growing it (via
@@ -309,16 +418,16 @@ export function App() {
     }
   }
 
-  // Resync the cursor whenever the query or tab changes: if the currently
-  // selected item is still in the (possibly re-filtered) list, keep the
-  // cursor on it — growing the render window to reveal it if it's beyond
-  // the current page — otherwise fall back to the top with a fresh window.
-  // This runs after the click handlers below re-render with the new list,
-  // so it correctly picks up cases where a click changes both the query and
-  // the tab at once (see `openJobFromSession`).
+  // Resync the cursor whenever the query, filters or tab change: if the
+  // currently selected item is still in the (possibly re-filtered) list,
+  // keep the cursor on it — growing the render window to reveal it if it's
+  // beyond the current page — otherwise fall back to the top with a fresh
+  // window. This runs after the click handlers below re-render with the new
+  // list, so it correctly picks up cases where a click changes both the
+  // query and the tab at once (see `openJobFromSession`).
   useEffect(() => {
     if (tab === "jobs" && selected?.type === "job") {
-      const i = filteredJobs.findIndex((j) => j.qmb_job_id === selected.id);
+      const i = filteredJobs.findIndex((j) => isSelected(selected, "job", j.archive, j.qmb_job_id));
       if (i >= 0) {
         setCursor(i);
         growRenderCount(Math.max(ROWS_PER_PAGE, i + 1), filteredJobs.length);
@@ -326,7 +435,9 @@ export function App() {
       }
     }
     if (tab === "sessions" && selected?.type === "session") {
-      const i = filteredSessions.findIndex((s) => s.session_id === selected.id);
+      const i = filteredSessions.findIndex((s) =>
+        isSelected(selected, "session", s.archive, s.session_id),
+      );
       if (i >= 0) {
         setCursor(i);
         growRenderCount(Math.max(ROWS_PER_PAGE, i + 1), filteredSessions.length);
@@ -337,24 +448,35 @@ export function App() {
     setRenderCount(ROWS_PER_PAGE);
     listRef.current?.scrollTo({ top: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, tab]);
+  }, [query, tab, archiveFilter, agentFilter]);
 
-  function openJob(id: string) {
-    setSelected({ type: "job", id });
+  function openJob(archive: string, id: string) {
+    setSelected({ type: "job", archive, id });
     setTab("jobs");
-    const i = filteredJobs.findIndex((j) => j.qmb_job_id === id);
+    const i = filteredJobs.findIndex((j) => j.archive === archive && j.qmb_job_id === id);
     if (i < 0) return;
     growRenderCount(i + 1, filteredJobs.length);
     setCursor(i);
   }
 
-  function openSession(id: string) {
-    setSelected({ type: "session", id });
+  function openSession(archive: string, id: string) {
+    setSelected({ type: "session", archive, id });
     setTab("sessions");
-    const i = filteredSessions.findIndex((s) => s.session_id === id);
+    const i = filteredSessions.findIndex((s) => s.archive === archive && s.session_id === id);
     if (i < 0) return;
     growRenderCount(i + 1, filteredSessions.length);
     setCursor(i);
+  }
+
+  /** Follow a session/parent-job link from a job living in `archives`. */
+  function openLinkedSession(archives: string[], id: string) {
+    const session = findItem(allSessions, archives, id, sessionId);
+    openSession(session?.archive ?? archives[0], id);
+  }
+
+  function openLinkedJob(archives: string[], id: string) {
+    const job = index ? findItem(index.jobs, archives, id, jobId) : undefined;
+    openJob(job?.archive ?? archives[0], id);
   }
 
   /**
@@ -363,8 +485,8 @@ export function App() {
    * job), then select the clicked job. The token is the only filter state —
    * erasing it from the search bar restores the full jobs list.
    */
-  function openJobFromSession(id: string, sessionId: string) {
-    setSelected({ type: "job", id });
+  function openJobFromSession(archive: string, id: string, sessionId: string) {
+    setSelected({ type: "job", archive, id });
     setTab("jobs");
     setQuery(`session:${sessionId} `);
   }
@@ -374,21 +496,23 @@ export function App() {
   // full on-demand detail (agents/tasks/cwds) in the background.
   useEffect(() => {
     if (selected?.type !== "session") return;
-    const sessionId = selected.id;
-    const session = allSessions.find((s) => s.session_id === sessionId);
-    if (!session || session.origin !== "remote" || sessionOverrides[sessionId]) return;
+    const { archive, id } = selected;
+    const key = itemKey(archive, id);
+    const session = allSessions.find((s) => s.archive === archive && s.session_id === id);
+    if (!session || session.origin !== "remote") return;
+    if (sessionOverrides[key] || sessionFetchFailed[key]) return;
 
     let cancelled = false;
-    fetchSessionDetail(sessionId, "remote")
+    fetchSessionDetail(id, archive)
       .then((detail) => {
         if (cancelled) return;
-        setSessionOverrides((prev) => ({ ...prev, [sessionId]: detail }));
+        setSessionOverrides((prev) => ({ ...prev, [key]: detail }));
       })
       .catch(() => {
         // Keep the derived placeholder on failure — non-fatal, but flag it
         // so the detail view can note the summary is index-derived, not a
         // manifest fetch that hasn't happened yet.
-        if (!cancelled) setSessionFetchFailed((prev) => ({ ...prev, [sessionId]: true }));
+        if (!cancelled) setSessionFetchFailed((prev) => ({ ...prev, [key]: true }));
       });
     return () => {
       cancelled = true;
@@ -399,6 +523,8 @@ export function App() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const isSearchFocused = document.activeElement === searchRef.current;
+      // Leave arrow keys/Enter to a focused filter <select>.
+      if (document.activeElement instanceof HTMLSelectElement) return;
 
       if (e.key === "/" && !isSearchFocused) {
         e.preventDefault();
@@ -426,10 +552,10 @@ export function App() {
       if (e.key === "Enter") {
         if (tab === "jobs" && filteredJobs[cursor]) {
           e.preventDefault();
-          openJob(filteredJobs[cursor].qmb_job_id);
+          openJob(filteredJobs[cursor].archive, filteredJobs[cursor].qmb_job_id);
         } else if (tab === "sessions" && filteredSessions[cursor]) {
           e.preventDefault();
-          openSession(filteredSessions[cursor].session_id);
+          openSession(filteredSessions[cursor].archive, filteredSessions[cursor].session_id);
         }
       }
     }
@@ -438,23 +564,43 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, cursor, filteredJobs, filteredSessions, totalCount]);
 
+  const selectedSession =
+    selected?.type === "session"
+      ? findItem(allSessions, [selected.archive], selected.id, sessionId)
+      : undefined;
+  const selectedJob =
+    selected?.type === "job" && index
+      ? findItem(index.jobs, [selected.archive], selected.id, jobId)
+      : undefined;
+
   const sessionJobs: JobSummary[] = useMemo(() => {
-    if (!index || selected?.type !== "session") return [];
-    const session = allSessions.find((s) => s.session_id === selected.id);
-    if (!session) return [];
-    const ids = new Set(session.jobs);
-    return index.jobs.filter((j) => ids.has(j.qmb_job_id));
-  }, [index, allSessions, selected]);
+    if (!index || !selectedSession) return [];
+    const ids = new Set(selectedSession.jobs);
+    return index.jobs.filter(
+      (job) => ids.has(job.qmb_job_id) && sharesArchive(job, selectedSession),
+    );
+  }, [index, selectedSession]);
 
-  const selectedJobOrigin = useMemo(() => {
-    if (!index || selected?.type !== "job") return "local" as const;
-    return index.jobs.find((j) => j.qmb_job_id === selected.id)?.origin ?? "local";
-  }, [index, selected]);
-
-  const remoteErrorToShow =
-    index?.remote_error && index.remote_error !== dismissedRemoteError ? index.remote_error : null;
-  const indexStaleToShow =
-    index?.index_stale && index.index_stale !== dismissedIndexStale ? index.index_stale : null;
+  const warnings: Warning[] = [];
+  if (archivesError) {
+    warnings.push({ message: `Could not list remote archives: ${archivesError}`, tone: "error" });
+  }
+  for (const status of index?.archives ?? []) {
+    if (status.status === "error") {
+      warnings.push({
+        message: `Archive "${status.name}" is unavailable (other archives still load): ${status.error}`,
+        tone: "warning",
+      });
+    } else if (status.index_stale) {
+      warnings.push({
+        message:
+          `Archive "${status.name}" index is missing ${status.index_stale} session(s) — run ` +
+          `\`${reindexCommand(status.name, archiveList)}\` to also see their jobs in the Jobs tab.`,
+        tone: "warning",
+      });
+    }
+  }
+  const visibleWarnings = warnings.filter((warning) => !dismissed.has(warning.message));
 
   return (
     <div class="app">
@@ -489,20 +635,55 @@ export function App() {
           </button>
         </div>
 
+        <div class="filters">
+          <label class="filter">
+            <span class="filter__label">Archive</span>
+            <select
+              class="filter__select"
+              value={archiveFilter}
+              onChange={(e) => setArchiveFilter((e.target as HTMLSelectElement).value)}
+            >
+              <option value={ALL}>all</option>
+              <option value={LOCAL_ARCHIVE}>local</option>
+              {archiveList.map((archive) => (
+                <option key={archive.name} value={archive.name}>
+                  {archive.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label class="filter">
+            <span class="filter__label">Agent</span>
+            <select
+              class="filter__select"
+              value={agentFilter}
+              onChange={(e) => setAgentFilter((e.target as HTMLSelectElement).value)}
+            >
+              <option value={ALL}>all</option>
+              {agentChoices.map((agent) => (
+                <option key={agent} value={agent}>
+                  {agent}
+                </option>
+              ))}
+              <option value={UNKNOWN_AGENT}>unknown</option>
+            </select>
+          </label>
+        </div>
+
         <div class="tabs">
           <button
             type="button"
             class={`tab ${tab === "sessions" ? "tab--active" : ""}`}
             onClick={() => setTab("sessions")}
           >
-            Sessions ({allSessions.length})
+            Sessions ({scopedSessions.length})
           </button>
           <button
             type="button"
             class={`tab ${tab === "jobs" ? "tab--active" : ""}`}
             onClick={() => setTab("jobs")}
           >
-            Jobs ({index?.jobs.length ?? 0})
+            Jobs ({scopedJobs.length})
           </button>
         </div>
 
@@ -510,64 +691,74 @@ export function App() {
 
         <div class="list" ref={listRef} onScroll={handleListScroll}>
           {tab === "sessions"
-            ? visibleSessions.map((session, i) => (
-                <button
-                  type="button"
-                  key={session.session_id}
-                  class={`row ${i === cursor ? "row--cursor" : ""} ${
-                    selected?.type === "session" && selected.id === session.session_id
-                      ? "row--selected"
-                      : ""
-                  }`}
-                  onClick={() => openSession(session.session_id)}
-                >
-                  <div class="row__top">
-                    <span class="row__id">{session.session_id}</span>
-                    <span class="row__badges">
-                      <span class={`badge badge--${session.origin}`}>{session.origin}</span>
-                      {/* Remote sessions summarized from index.json are the normal
-                          case now (one GCS download, no manifest scan) — only flag
-                          the rarer case of a session with no manifest anywhere. */}
-                      {session.derived && session.origin !== "remote" && (
-                        <span class="badge badge--derived">no manifest</span>
-                      )}
-                      {session.unindexed && <span class="badge badge--derived">unindexed</span>}
-                    </span>
-                  </div>
-                  <div class="row__excerpt">
-                    {session.unindexed ? "? jobs" : `${session.count} jobs`} ·{" "}
-                    {fmtDate(session.first)} → {fmtDate(session.latest)}
-                  </div>
-                  {session.agents.length > 0 && (
-                    <div class="row__meta">
-                      <span>{session.agents.join(", ")}</span>
+            ? visibleSessions.map((session, i) => {
+                const label =
+                  session.agents.length > 1 ? session.agents.join(", ") : agentLabel(session);
+                return (
+                  <button
+                    type="button"
+                    key={itemKey(session.archive, session.session_id)}
+                    class={`row ${i === cursor ? "row--cursor" : ""} ${
+                      isSelected(selected, "session", session.archive, session.session_id)
+                        ? "row--selected"
+                        : ""
+                    }`}
+                    onClick={() => openSession(session.archive, session.session_id)}
+                  >
+                    <div class="row__top">
+                      <span class="row__id">{session.session_id}</span>
+                      <span class="row__badges">
+                        <ArchiveBadges item={session} primary={primaryArchive} />
+                        {/* Remote sessions summarized from index.json are the normal
+                            case now (one GCS download, no manifest scan) — only flag
+                            the rarer case of a session with no manifest anywhere. */}
+                        {session.derived && session.origin !== "remote" && (
+                          <span class="badge badge--derived">no manifest</span>
+                        )}
+                        {session.unindexed && <span class="badge badge--derived">unindexed</span>}
+                      </span>
                     </div>
-                  )}
-                </button>
-              ))
-            : visibleJobs.map((job, i) => (
-                <button
-                  type="button"
-                  key={job.qmb_job_id}
-                  class={`row ${i === cursor ? "row--cursor" : ""} ${
-                    selected?.type === "job" && selected.id === job.qmb_job_id ? "row--selected" : ""
-                  }`}
-                  onClick={() => openJob(job.qmb_job_id)}
-                >
-                  <div class="row__top">
-                    <span class="row__id">{job.qmb_job_id}</span>
-                    <span class="row__badges">
-                      <span class={`badge badge--${job.origin}`}>{job.origin}</span>
-                    </span>
-                  </div>
-                  <div class="row__excerpt">{job.query_excerpt || "(empty query)"}</div>
-                  <div class="row__meta">
-                    <span>{fmtDate(job.created_at)}</span>
-                    {job.session_id && <span class="row__session">{job.session_id}</span>}
-                    <span>{fmtBytes(job.stats.bytes_processed)}</span>
-                  </div>
-                </button>
-              ))}
+                    <div class="row__excerpt">
+                      {session.unindexed ? "? jobs" : `${session.count} jobs`} ·{" "}
+                      {fmtDate(session.first)} → {fmtDate(session.latest)}
+                    </div>
+                    {label && (
+                      <div class="row__meta">
+                        <span class="row__agent">{label}</span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })
+            : visibleJobs.map((job, i) => {
+                const label = agentLabel(job);
+                return (
+                  <button
+                    type="button"
+                    key={itemKey(job.archive, job.qmb_job_id)}
+                    class={`row ${i === cursor ? "row--cursor" : ""} ${
+                      isSelected(selected, "job", job.archive, job.qmb_job_id)
+                        ? "row--selected"
+                        : ""
+                    }`}
+                    onClick={() => openJob(job.archive, job.qmb_job_id)}
+                  >
+                    <div class="row__top">
+                      <span class="row__id">{job.qmb_job_id}</span>
+                      <span class="row__badges">
+                        <ArchiveBadges item={job} primary={primaryArchive} />
+                      </span>
+                    </div>
+                    <div class="row__excerpt">{job.query_excerpt || "(empty query)"}</div>
+                    <div class="row__meta">
+                      <span>{fmtDate(job.created_at)}</span>
+                      {label && <span class="row__agent">{label}</span>}
+                      {job.session_id && <span class="row__session">{job.session_id}</span>}
+                      <span>{fmtBytes(job.stats.bytes_processed)}</span>
+                    </div>
+                  </button>
+                );
+              })}
           {!index && !loadError && <div class="pane-loading">Loading…</div>}
         </div>
 
@@ -576,52 +767,59 @@ export function App() {
           {tab === "jobs" && archiveSearch?.query === query && (
             <span class="list-footer__remote-status"> · {archiveSearch.status}</span>
           )}
-          {remoteLoading && !index?.remote_error && (
-            <span class="list-footer__remote-status"> · loading remote…</span>
+          {remoteLoading && (
+            <span class="list-footer__remote-status"> · loading archives…</span>
           )}
         </div>
       </div>
 
       <div class="right-pane">
-        {remoteErrorToShow && (
+        {visibleWarnings.map((warning) => (
           <Banner
-            message={`Remote archive error: ${remoteErrorToShow}`}
-            onDismiss={() => setDismissedRemoteError(remoteErrorToShow)}
+            key={warning.message}
+            message={warning.message}
+            tone={warning.tone}
+            onDismiss={() => setDismissed((prev) => new Set([...prev, warning.message]))}
           />
-        )}
-        {indexStaleToShow && (
-          <Banner
-            message={
-              `Remote index is missing ${indexStaleToShow} session(s) — run ` +
-              "`qmb jobs reindex --remote` to also see their jobs in the Jobs tab."
-            }
-            onDismiss={() => setDismissedIndexStale(indexStaleToShow)}
-          />
-        )}
+        ))}
         {!selected && <div class="empty-state">Select a job or session to see details.</div>}
         {selected?.type === "job" && (
           <JobDetail
             jobId={selected.id}
-            origin={selectedJobOrigin}
-            onSelectSession={openSession}
-            onSelectJob={openJob}
+            archive={selected.archive}
+            tagged={selectedJob ?? null}
+            primaryArchive={primaryArchive}
+            onSelectSession={(id) =>
+              openLinkedSession(selectedJob ? archivesOf(selectedJob) : [selected.archive], id)
+            }
+            onSelectJob={(id) =>
+              openLinkedJob(selectedJob ? archivesOf(selectedJob) : [selected.archive], id)
+            }
           />
         )}
         {selected?.type === "session" &&
           index &&
-          (() => {
-            const session = allSessions.find((s) => s.session_id === selected.id);
-            return session ? (
-              <SessionDetail
-                session={session}
-                jobs={sessionJobs}
-                fetchFailed={!!sessionFetchFailed[session.session_id]}
-                onSelectJob={(jobId) => openJobFromSession(jobId, session.session_id)}
-              />
-            ) : (
-              <div class="pane-error">Session not found: {selected.id}</div>
-            );
-          })()}
+          (selectedSession ? (
+            <SessionDetail
+              session={selectedSession}
+              jobs={sessionJobs}
+              fetchFailed={
+                !!sessionFetchFailed[itemKey(selectedSession.archive, selectedSession.session_id)]
+              }
+              primaryArchive={primaryArchive}
+              reindexCommand={reindexCommand(selectedSession.archive, archiveList)}
+              onSelectJob={(id) => {
+                const job = findItem(sessionJobs, archivesOf(selectedSession), id, jobId);
+                openJobFromSession(
+                  job?.archive ?? selectedSession.archive,
+                  id,
+                  selectedSession.session_id,
+                );
+              }}
+            />
+          ) : (
+            <div class="pane-error">Session not found: {selected.id}</div>
+          ))}
       </div>
     </div>
   );

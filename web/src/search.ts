@@ -24,7 +24,10 @@ function jobCandidates(job: JobSummary): (string | null | undefined)[] {
     job.qmb_job_id,
     job.session_id,
     job.source.label,
-    job.agent?.name,
+    job.agent_name ?? job.agent?.name,
+    job.user,
+    job.task,
+    job.archive,
     job.created_at,
     fmtDate(job.created_at),
   ];
@@ -33,8 +36,13 @@ function jobCandidates(job: JobSummary): (string | null | undefined)[] {
 function sessionCandidates(session: SessionSummary): (string | null | undefined)[] {
   return [
     session.session_id,
+    session.archive,
+    session.agent_name,
+    session.user,
+    session.task,
     ...session.agents,
     ...session.tasks,
+    ...session.users,
     ...session.cwds,
     session.first,
     session.latest,

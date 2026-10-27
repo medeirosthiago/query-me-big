@@ -1,7 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { fetchJobDetail, fetchJobPreview } from "../api";
+import { LOCAL_ARCHIVE } from "../archives";
 import { fmtBytes, fmtDate, fmtNumber, fmtSeconds } from "../format";
-import type { JobDetail as JobDetailData, Origin, PreviewResponse } from "../types";
+import type { ArchiveTagged, JobDetail as JobDetailData, PreviewResponse } from "../types";
+import { ArchiveBadges } from "./ArchiveBadges";
 import { CopyLine } from "./CopyLine";
 import { SqlView } from "./SqlView";
 
@@ -9,12 +11,23 @@ const PAGE_SIZE = 200;
 
 interface Props {
   jobId: string;
-  origin: Origin;
+  /** Archive to read the job from: `"local"` or a remote archive name. */
+  archive: string;
+  /** The job's index entry, when listed, for its archive badges. */
+  tagged: ArchiveTagged | null;
+  primaryArchive: string | null;
   onSelectSession: (sessionId: string) => void;
   onSelectJob: (jobId: string) => void;
 }
 
-export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props) {
+export function JobDetail({
+  jobId,
+  archive,
+  tagged,
+  primaryArchive,
+  onSelectSession,
+  onSelectJob,
+}: Props) {
   const [detail, setDetail] = useState<JobDetailData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -27,7 +40,7 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
     setError(null);
     setPage(1);
     setPreview(null);
-    fetchJobDetail(jobId)
+    fetchJobDetail(jobId, archive)
       .then((data) => {
         if (!cancelled) setDetail(data);
       })
@@ -37,12 +50,12 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
     return () => {
       cancelled = true;
     };
-  }, [jobId]);
+  }, [jobId, archive]);
 
   useEffect(() => {
     let cancelled = false;
     setPreviewError(null);
-    fetchJobPreview(jobId, page, PAGE_SIZE)
+    fetchJobPreview(jobId, archive, page, PAGE_SIZE)
       .then((data) => {
         if (!cancelled) setPreview(data);
       })
@@ -52,19 +65,30 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
     return () => {
       cancelled = true;
     };
-  }, [jobId, page]);
+  }, [jobId, archive, page]);
 
   if (error) return <div class="pane-error">Failed to load job {jobId}: {error}</div>;
   if (!detail) return <div class="pane-loading">Loading job {jobId}…</div>;
 
   const columns = preview?.rows.length ? Object.keys(preview.rows[0]) : detail.schema.map((f) => f.name);
   const totalPages = preview ? Math.max(1, Math.ceil(preview.total / preview.page_size)) : 1;
+  const agent = detail.agent;
+  const agentName = detail.agent_name ?? agent?.name ?? null;
+  const user = detail.user ?? agent?.user ?? null;
+  const task = detail.task ?? agent?.task ?? null;
+  const tags = agent?.tags ?? [];
+  const metricRequest = agent?.metadata?.["metric_request"];
+  const isRemote = archive !== LOCAL_ARCHIVE;
+  // Extra archives are read-only and never the default lookup target.
+  const archiveFlag = isRemote && archive !== primaryArchive ? ` --archive ${archive}` : "";
 
   return (
     <div class="detail job-detail">
       <header class="detail__header">
         <h2>{detail.qmb_job_id}</h2>
-        <span class={`badge badge--${origin}`}>{origin}</span>
+        <span class="row__badges">
+          <ArchiveBadges item={tagged ?? { archive }} primary={primaryArchive} />
+        </span>
       </header>
 
       <section class="detail__section">
@@ -158,14 +182,40 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
             </span>
           </div>
         )}
-        {detail.agent && (
-          <div class="field field--wide">
+        {agentName && (
+          <div class="field">
             <span class="field__label">Agent</span>
-            <span class="field__value">
-              {detail.agent.name ?? "\u2014"}
-              {detail.agent.task ? ` — ${detail.agent.task}` : ""}
-              {detail.agent.cwd ? ` (${detail.agent.cwd})` : ""}
-            </span>
+            <span class="field__value">{agentName}</span>
+          </div>
+        )}
+        {user && (
+          <div class="field">
+            <span class="field__label">Person</span>
+            <span class="field__value">{user}</span>
+          </div>
+        )}
+        {task && (
+          <div class="field field--wide">
+            <span class="field__label">Question / task</span>
+            <span class="field__value">{task}</span>
+          </div>
+        )}
+        {tags.length > 0 && (
+          <div class="field">
+            <span class="field__label">Tags</span>
+            <span class="field__value">{tags.join(", ")}</span>
+          </div>
+        )}
+        {agent?.cwd && (
+          <div class="field">
+            <span class="field__label">Cwd</span>
+            <span class="field__value">{agent.cwd}</span>
+          </div>
+        )}
+        {metricRequest !== undefined && metricRequest !== null && (
+          <div class="field field--wide">
+            <span class="field__label">Metric request</span>
+            <pre class="field__value json-block">{JSON.stringify(metricRequest, null, 2)}</pre>
           </div>
         )}
       </section>
@@ -192,9 +242,9 @@ export function JobDetail({ jobId, origin, onSelectSession, onSelectJob }: Props
 
       <section class="detail__section">
         <h3>Reproduce</h3>
-        <CopyLine command={`qmb jobs sql ${detail.qmb_job_id}`} />
-        <CopyLine command={`qmb jobs open ${detail.qmb_job_id}`} />
-        {origin === "remote" && <CopyLine command={`qmb jobs import ${detail.qmb_job_id}`} />}
+        <CopyLine command={`qmb jobs sql ${detail.qmb_job_id}${archiveFlag}`} />
+        <CopyLine command={`qmb jobs open ${detail.qmb_job_id}${archiveFlag}`} />
+        {isRemote && <CopyLine command={`qmb jobs import ${detail.qmb_job_id}${archiveFlag}`} />}
       </section>
     </div>
   );

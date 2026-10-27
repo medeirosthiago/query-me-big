@@ -20,33 +20,46 @@ __all__ = ["browse_catalog", "describe_target"]
 StepCallback = Callable[[str, float, str], None]
 
 
+def _parse_target(target: str) -> tuple[str | None, str, str | None]:
+    """Split ``target`` into ``(project, dataset, table)``.
+
+    ``project`` is ``None`` when the target does not name one. Raises
+    ``ValueError`` when the target cannot be parsed.
+    """
+    error = ValueError(f"Cannot parse target {target!r}. Use 'dataset' or 'dataset.table'.")
+    project: str | None = None
+    rest = target
+    # ``project:dataset[.table]`` is BigQuery's own shorthand.
+    if ":" in target:
+        project, _, rest = target.partition(":")
+        if not project or ":" in rest:
+            raise error
+    parts = rest.split(".")
+    if project is None and len(parts) == 3:
+        project, parts = parts[0], parts[1:]
+    if len(parts) > 2:
+        raise error
+    return project, parts[0], parts[1] if len(parts) == 2 else None
+
+
 def describe_target(client: Any, target: str) -> dict[str, Any]:
     """Return dataset or table metadata for ``target``.
 
-    ``target`` is ``dataset``, ``dataset.table`` or ``project.dataset.table``
-    (``project:dataset.table`` is accepted too). Raises ``ValueError`` when
-    the target has more than three parts.
+    ``target`` is ``dataset``, ``dataset.table``, ``project.dataset.table``,
+    ``project:dataset`` or ``project:dataset.table``. Without a project the
+    client's project is used. Raises ``ValueError`` when the target has more
+    parts than that.
     """
-    # ``dataset`` vs ``dataset.table`` — colons are also accepted as a
-    # convenience (``project:dataset.table`` is BigQuery's own shorthand).
-    normalized = target.replace(":", ".")
-    parts = normalized.split(".")
-    if len(parts) == 1:
-        dataset = _catalog.get_dataset_metadata(client, parts[0])
+    project, dataset_id, table_id = _parse_target(target)
+    if table_id is None:
+        dataset = _catalog.get_dataset_metadata(client, dataset_id, project)
         return {
             "kind": "dataset",
             "dataset": dataset.to_api_repr(),
-            "tables": list(_catalog.list_dataset_tables(client, parts[0])),
+            "tables": list(_catalog.list_dataset_tables(client, dataset_id, project)),
         }
-    if len(parts) == 2:
-        table = _catalog.get_table_metadata(client, parts[0], parts[1])
-        return {"kind": "table", "table": table.to_api_repr()}
-    if len(parts) == 3:
-        # project.dataset.table — honor it but require the configured
-        # client's project for now; cross-project describe is out of scope.
-        table = _catalog.get_table_metadata(client, parts[1], parts[2])
-        return {"kind": "table", "table": table.to_api_repr()}
-    raise ValueError(f"Cannot parse target {target!r}. Use 'dataset' or 'dataset.table'.")
+    table = _catalog.get_table_metadata(client, dataset_id, table_id, project)
+    return {"kind": "table", "table": table.to_api_repr()}
 
 
 def browse_catalog(
@@ -67,8 +80,12 @@ def browse_catalog(
     ``INFORMATION_SCHEMA.TABLES`` (default) or a per-dataset
     ``list_tables`` fan-out (``legacy_list_tables=True``).
 
+    ``project`` selects the project to inspect (default: the client's).
+    Jobs still run, and are billed, in the client's project.
+
     ``on_step(label, seconds, extra)`` is called after each timed step.
     """
+    project = project or getattr(client, "project", None)
 
     def _stamp(label: str, seconds: float, extra: str = "") -> None:
         if on_step is not None:
@@ -78,20 +95,22 @@ def browse_catalog(
 
     if pattern is None:
         # Cheap path: just the dataset list, no per-dataset table fetch.
-        dataset_ids = _catalog.list_dataset_ids(client)
+        dataset_ids = _catalog.list_dataset_ids(client, project)
         _stamp("list_dataset_ids", time.perf_counter() - t0, f"n={len(dataset_ids)}")
         return {
-            "project": getattr(client, "project", None) or project,
+            "project": project,
             "datasets": dataset_ids,
         }
 
     if legacy_list_tables:
         t_ds = time.perf_counter()
-        dataset_ids = _catalog.list_dataset_ids(client)
+        dataset_ids = _catalog.list_dataset_ids(client, project)
         _stamp("list_dataset_ids", time.perf_counter() - t_ds, f"n={len(dataset_ids)}")
 
         t1 = time.perf_counter()
-        tables_by_dataset = _catalog.build_table_index(client, dataset_ids, max_workers=workers)
+        tables_by_dataset = _catalog.build_table_index(
+            client, dataset_ids, max_workers=workers, project=project
+        )
         total_tables = sum(len(v) for v in tables_by_dataset.values())
         _stamp(
             "build_table_index",
@@ -130,7 +149,7 @@ def browse_catalog(
     )
 
     payload = {
-        "project": getattr(client, "project", None) or project,
+        "project": project,
         "pattern": pattern,
         "matches": [{"dataset_id": m.dataset_id, "tables": list(m.tables)} for m in matches],
     }

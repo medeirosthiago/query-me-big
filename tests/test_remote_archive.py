@@ -309,6 +309,9 @@ def test_gcs_export_upserts_remote_index_entry(tmp_path: Path) -> None:
         "total_rows": 2,
         "bytes_processed": 2048,
         "query_excerpt": "SELECT 1 AS id",
+        "agent_name": None,
+        "user": None,
+        "task": None,
     }
 
 
@@ -601,3 +604,26 @@ def test_gcs_write_index_persists_built_index(tmp_path: Path) -> None:
     persisted = json.loads(client.objects["qmb/index.json"].decode())
     assert persisted == index
     assert remote.list_jobs() == list(index["jobs"].values())
+
+
+def test_gcs_index_entries_carry_agent_name_user_and_task(tmp_path: Path) -> None:
+    record = _seed_job(
+        tmp_path / "source",
+        agent_context=AgentContext(
+            name="example-mcp",
+            session_id="agent/session",
+            user="jane.doe@example.com",
+            task="Signups yesterday?",
+        ),
+    )
+    client = FakeClient()
+    remote = GcsRemoteArchive("gs://bucket/qmb", client=client)
+    remote.export_job(record)
+
+    exported = json.loads(client.objects["qmb/index.json"].decode())["jobs"][record.qmb_job_id]
+    rebuilt = remote.build_index()["jobs"][record.qmb_job_id]
+
+    for entry in (exported, rebuilt):
+        assert entry["agent_name"] == "example-mcp"
+        assert entry["user"] == "jane.doe@example.com"
+        assert entry["task"] == "Signups yesterday?"

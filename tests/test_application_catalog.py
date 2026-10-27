@@ -106,12 +106,45 @@ def test_describe_target_dataset_table() -> None:
 
 
 @pytest.mark.parametrize("target", ["other.analytics.orders", "other:analytics.orders"])
-def test_describe_target_three_parts_uses_client_project(target: str) -> None:
+def test_describe_target_table_in_explicit_project(target: str) -> None:
     client = FakeCatalogClient()
 
     payload = describe_target(client, target)
 
-    assert payload == {"kind": "table", "table": {"id": "proj.analytics.orders"}}
+    assert payload == {"kind": "table", "table": {"id": "other.analytics.orders"}}
+    assert client.calls == [("get_table", "other.analytics.orders")]
+
+
+def test_describe_target_dataset_in_explicit_project() -> None:
+    client = FakeCatalogClient()
+
+    payload = describe_target(client, "other:analytics_prod")
+
+    assert payload["kind"] == "dataset"
+    assert payload["tables"] == ["orders", "users"]
+    assert client.calls == [
+        ("get_dataset", "other.analytics_prod"),
+        ("list_tables", "other.analytics_prod"),
+    ]
+
+
+def test_describe_target_without_project_uses_client_project() -> None:
+    client = FakeCatalogClient()
+
+    describe_target(client, "analytics_prod")
+    describe_target(client, "analytics.orders")
+
+    assert client.calls == [
+        ("get_dataset", "proj.analytics_prod"),
+        ("list_tables", "proj.analytics_prod"),
+        ("get_table", "proj.analytics.orders"),
+    ]
+
+
+@pytest.mark.parametrize("target", ["a.b.c.d", "p:a.b.c", "p:q:a", ":a.b"])
+def test_describe_target_rejects_unparseable_targets(target: str) -> None:
+    with pytest.raises(ValueError, match="Cannot parse target"):
+        describe_target(FakeCatalogClient(), target)
 
 
 def test_describe_target_rejects_more_than_three_parts() -> None:
@@ -218,3 +251,58 @@ def test_browse_catalog_without_on_step_is_silent(capsys: pytest.CaptureFixture[
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_browse_catalog_explicit_project_lists_that_projects_datasets() -> None:
+    client = FakeCatalogClient()
+
+    payload = browse_catalog(client, None, project="other")
+
+    assert payload["project"] == "other"
+    assert payload["datasets"] == ["analytics_dev", "analytics_prod", "raw"]
+    assert client.calls == [("list_datasets", "other")]
+
+
+def test_browse_catalog_explicit_project_legacy_fans_out_in_that_project() -> None:
+    client = FakeCatalogClient()
+
+    payload = browse_catalog(client, "raw", project="other", legacy_list_tables=True)
+
+    assert payload["project"] == "other"
+    assert payload["matches"] == [{"dataset_id": "raw", "tables": ["raw.events"]}]
+    assert ("list_datasets", "other") in client.calls
+    list_table_refs = {ref for name, ref in client.calls if name == "list_tables"}
+    assert list_table_refs == {"other.analytics_prod", "other.analytics_dev", "other.raw"}
+
+
+def test_browse_catalog_explicit_project_information_schema_queries_that_project(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("QMB_REGIONS_CACHE_DIR", str(tmp_path / "regions"))
+    client = FakeCatalogClient()
+    sqls: list[str] = []
+    original_query = client.query
+
+    def recording_query(sql: str, location: str | None = None) -> FakeJob:
+        sqls.append(sql)
+        return original_query(sql, location=location)
+
+    client.query = recording_query  # type: ignore[method-assign]
+
+    payload = browse_catalog(client, "raw", project="other", refresh_regions=True)
+
+    assert payload["project"] == "other"
+    assert payload["matches"] == [{"dataset_id": "raw", "tables": ["raw.events"]}]
+    assert ("list_datasets", "other") in client.calls
+    assert len(sqls) == 1
+    assert "`other.region-us-west1.INFORMATION_SCHEMA.TABLES`" in sqls[0]
+
+
+def test_browse_catalog_defaults_to_client_project_on_each_branch() -> None:
+    client = FakeCatalogClient(location="US")
+
+    assert browse_catalog(client, None)["project"] == "proj"
+    assert browse_catalog(client, "raw", legacy_list_tables=True)["project"] == "proj"
+    assert browse_catalog(client, "raw")["project"] == "proj"
+    assert ("list_datasets", "proj") in client.calls
+    assert ("list_tables", "proj.raw") in client.calls

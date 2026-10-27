@@ -182,7 +182,7 @@ stale unless the project starts using a brand-new region.
 | Flag | Short | Description |
 |---|---|---|
 | `PATTERN` (positional) | | Fuzzy match (e.g. `orders`) or glob (e.g. `analytics_*`). |
-| `--project ID` | | GCP project ID. |
+| `--project ID` | | GCP project to inspect (and to run jobs in). Datasets in a project other than the client's can be browsed if you have access. |
 | `--location US\|EU\|...` | | Pin INFORMATION_SCHEMA queries to one region (skips multi-region auto-discovery; may miss datasets in other regions). |
 | `--tui` | `-t` | Open the interactive browser pane instead of printing JSON. |
 | `--refresh-regions` | | Ignore the cached region list and re-discover from `list_datasets`. The fresh value is written back to the cache. Use after your project starts using a new region. |
@@ -202,7 +202,7 @@ clustering, sizes, timestamps, labels, descriptions, ...).
 
 | Flag | Description |
 |---|---|
-| `TARGET` (positional, required) | `dataset` or `dataset.table`. The BQ-native `project:dataset.table` shorthand is also accepted. |
+| `TARGET` (positional, required) | `dataset`, `dataset.table` or `project.dataset.table`. The BQ-native `project:dataset` and `project:dataset.table` shorthands are also accepted. Without a project, `--project` / the default project is used. |
 | `--project ID` | GCP project ID. |
 | `--location US\|EU\|...` | BigQuery location. |
 
@@ -266,12 +266,18 @@ to import it from the configured remote archive first.
 | `JOB_ID` (positional, required) | Full or unambiguous-prefix qmb job id. |
 | `--format text\|json` | Output format (default `text`). |
 | `--destination URI` | Remote archive URI used if the job is missing locally. |
+| `--archive NAME` | Named remote archive (`[[remote_archives]]`, or the primary's name) used if the job is missing locally. Defaults to the primary archive; can't be combined with `--destination`. |
 
 ### `qmb jobs sql JOB_ID`
 
 Print the archived resolved SQL for a qmb job — exact text that was sent to
 BigQuery (post-dbt resolution, post-`--where` wrap). If the job is missing
 locally, qmb tries to import it from the configured remote archive first.
+
+| Flag | Description |
+|---|---|
+| `--destination URI` | Remote archive URI used if the job is missing locally. |
+| `--archive NAME` | Named remote archive (`[[remote_archives]]`, or the primary's name) used if the job is missing locally. Defaults to the primary archive; can't be combined with `--destination`. |
 
 ### `qmb jobs paths JOB_ID`
 
@@ -283,6 +289,7 @@ qmb tries to import it from the configured remote archive first.
 |---|---|
 | `--format text\|json` | Output format (default `text`). |
 | `--destination URI` | Remote archive URI used if the job is missing locally. |
+| `--archive NAME` | Named remote archive (`[[remote_archives]]`, or the primary's name) used if the job is missing locally. Defaults to the primary archive; can't be combined with `--destination`. |
 
 ### `qmb jobs open JOB_ID`
 
@@ -294,6 +301,7 @@ configured remote archive first. The interactive verb — always TUI-first.
 |---|---|
 | `--page-size N` | Rows per page in the TUI (default `200`). |
 | `--destination URI` | Remote archive URI used if the job is missing locally. |
+| `--archive NAME` | Named remote archive (`[[remote_archives]]`, or the primary's name) used if the job is missing locally. Defaults to the primary archive; can't be combined with `--destination`. |
 
 ### `qmb jobs export [JOB_ID]`
 
@@ -347,6 +355,7 @@ Provide either `JOB_ID` or `--session-id`.
 | `JOB_ID` (optional positional) | Full or partial remote qmb job id to import. |
 | `--session-id ID` / `--session ID` | Import every remote job in a session. |
 | `--destination URI` | Remote archive URI. Defaults through env/config; required when no remote archive is configured. |
+| `--archive NAME` | Import from a named archive (`[[remote_archives]]`, or the primary's name) instead of the primary. Can't be combined with `--destination`. |
 | `--overwrite` | Replace an existing local job archive with the remote copy. Without this, existing jobs are skipped. |
 | `--format text\|json` | Output format (default `text`). |
 
@@ -382,15 +391,18 @@ binds a port, prints the URL, opens a browser tab, and serves until Ctrl-C.
 | `--host HOST` | Bind host. Defaults through config/env (see below), falling back to `127.0.0.1`. |
 | `--port N` | Bind port. Defaults through config/env (see below), falling back to `8850`. |
 | `--no-open` | Don't open a browser tab automatically. |
-| `--destination URI` | Remote archive URI to include in the job index. Defaults to `QMB_REMOTE_ARCHIVE_URI` or `~/.qmb/config.toml`; remote data is omitted entirely when unset. |
+| `--destination URI` | Primary remote archive URI to include in the job index. Defaults to `QMB_REMOTE_ARCHIVE_URI` or `~/.qmb/config.toml`; remote data is omitted entirely when unset. Extra `[[remote_archives]]` always come from the config file. |
 
 API endpoints (also used by the bundled frontend):
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/index` | Local (and, if configured, remote) jobs + sessions, each tagged with `origin: local\|remote\|both`. Pass `?refresh=1` to bypass the in-memory cache. |
-| `GET /api/jobs/{id}` | Metadata, resolved SQL, and schema for one job. Fetches on demand from the remote archive if the job isn't local. |
-| `GET /api/jobs/{id}/preview` | Paginated row preview (`?page=`, `?page_size=`, default page size `200`). Reads local `preview.jsonl` or fetches the remote preview on demand. |
+| `GET /api/index` | Local (and, if configured, remote) jobs + sessions, each tagged with `archive` (`local` or the archive name) and `origin: local\|remote\|both`, plus per-archive `archives` statuses. `?scope=local` or `?archive=NAME` returns one half; `?refresh=1` bypasses the in-memory cache. |
+| `GET /api/archives` | Configured remote archives (`name`, `uri`, `primary`) with `status: pending\|ok\|error`. No GCS calls. |
+| `GET /api/jobs/{id}` | Metadata, resolved SQL, and schema for one job. `?archive=NAME` reads it from that archive; without it, local first, then the primary archive. |
+| `GET /api/jobs/{id}/preview` | Paginated row preview (`?page=`, `?page_size=`, default page size `200`, `?archive=` as above). Reads local `preview.jsonl` or fetches the remote preview on demand. |
+| `GET /api/sessions/{id}` | One session's manifest. `?archive=NAME` reads it from that archive (`?scope=remote` still means the primary). |
+| `GET /api/search` | Staged search (`?q=`, `?period=recent\|older`, `?target=sql\|preview`). Covers SQL, ids, source, agent, person (`agent.user`) and task; remote archives are searched through their cached `index.json` (SQL target only). Returns `matches: [{archive, qmb_job_id}]`. |
 
 Bind host/port precedence is CLI flag → `QMB_WEB_HOST` / `QMB_WEB_PORT` →
 `[web].host` / `[web].port` in `~/.qmb/config.toml` → the `127.0.0.1` / `8850`
@@ -404,10 +416,29 @@ port = 8850
 
 Remote jobs/sessions only appear when a remote archive is configured (same
 precedence as everywhere else: `--destination`, `QMB_REMOTE_ARCHIVE_URI`,
-`~/.qmb/config.toml`). Each entry's `origin` is `local`, `remote`, or `both`
-(present in both, local fields win). If the remote archive is configured but
-unreachable, `/api/index` degrades gracefully: it returns local-only data plus
-a top-level `remote_error` field instead of failing the request.
+`~/.qmb/config.toml`), plus every extra `[[remote_archives]]` entry (see
+[Several archives](#several-archives)). Each archive is loaded, cached and
+refreshed on its own. Every job and session carries `archive` (`local` or the
+archive name); ids are only unique per archive, so the same job id in two
+archives stays two entries. A local item also found in an archive is listed
+once, as `origin: both` with the archive names in `also_in` (local fields
+win). If an archive is unreachable (403, 404, network), the others still load:
+`/api/index` reports it in `archives` (`status: error` with the message) and a
+top-level `remote_error` field instead of failing the request.
+
+Jobs and sessions also expose `agent_name`, `user` (from `agent.user`) and
+`task`. Index entries written before qmb 0.11.0 lack them; detail views then
+fall back to the job's `metadata.json` and the session manifest, and
+`qmb jobs reindex --remote --destination <uri>` rebuilds an archive's index
+with them (needs write access to that archive).
+
+In the UI, each item has a badge for its archive: `LOCAL`, the primary
+archive's name, or an extra archive's name in a stable per-name colour. Two
+filters narrow both lists by archive and by agent (`unknown` for jobs without
+one). Rows show the agent and person (e.g. `example-mcp · jane.doe@…`),
+and the job detail shows the agent, person, question/task, tags and the
+metric request (`agent.metadata.metric_request`) when present. A failed
+archive shows a small dismissable warning naming it.
 
 The frontend lives in `web/` (Vite + Preact + TypeScript, not part of the
 installed package) and is built separately: `npm install && npm run build`
@@ -636,6 +667,43 @@ Config file example:
 [remote_archive]
 uri = "gs://your-bucket/qmb/"
 preview_rows = 500
+# name = "qmb"            # optional label shown in `qmb web`, default "remote"
+```
+
+#### Several archives
+
+`[remote_archive]` is the primary archive: the only one qmb writes to
+(`qmb jobs export`, `qmb run --publish`, `qmb jobs reindex --remote` without
+`--destination`). Extra archive roots are declared as `[[remote_archives]]`
+entries and are **read-only**: `qmb web` lists them and `--archive NAME` reads
+from them, but qmb never exports to them.
+
+```toml
+[remote_archive]
+uri = "gs://example-bucket/qmb/"
+name = "qmb"
+
+[[remote_archives]]
+name = "mcp-staging"
+uri  = "gs://example-bucket/mcp/staging/"
+
+[[remote_archives]]
+name = "mcp"
+uri  = "gs://example-bucket/mcp/production/"
+```
+
+Each `uri` must be an archive root (`index.json`, `sessions/` and
+`<qmb_job_id>/` directly under it); only declared roots are read, with no
+nested discovery or wildcards. Names match `^[a-z0-9][a-z0-9_-]{0,31}$`, must
+be unique and can't be `local`; URIs must be `gs://bucket/prefix/` and
+unique. `--destination` and `QMB_REMOTE_ARCHIVE_URI` override only the
+primary's URI.
+
+Read from an extra archive with `--archive NAME`:
+
+```bash
+qmb jobs show <qmb_job_id> --archive mcp
+qmb jobs import --session-id <session_id> --archive mcp-staging
 ```
 
 #### Onboarding a teammate to a shared archive
@@ -665,8 +733,8 @@ team's shared archive:
    uri = "gs://your-bucket/qmb/"
    ```
 
-Then `qmb web` merges local and remote jobs/sessions (tagged
-`local`/`remote`/`both`), `qmb jobs import <id>` pulls anything down, and
+Then `qmb web` merges local and remote jobs/sessions (badged `LOCAL` or with
+the archive's name), `qmb jobs import <id>` pulls anything down, and
 `qmb run --publish` shares new jobs with the team — the remote index updates
 automatically on every export.
 

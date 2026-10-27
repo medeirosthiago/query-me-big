@@ -1,5 +1,8 @@
 import type {
   AgentContext,
+  AgentFields,
+  ArchiveStatus,
+  ArchiveTagged,
   EngineMetadata,
   IndexResponse,
   JobDetail,
@@ -21,8 +24,11 @@ import type {
  *   `JobRecord.to_metadata()` shape plus `query_excerpt` and `origin`.
  * - remote-only: a flatter shape with `engine` as a plain string and
  *   `source_label` instead of a nested `source` object.
+ *
+ * Both carry `archive` and the flat `agent_name`/`user`/`task` fields
+ * (null on remote index entries written before qmb 0.11.0).
  */
-interface RawLocalJobEntry {
+interface RawLocalJobEntry extends ArchiveTagged, AgentFields {
   qmb_job_id: string;
   created_at: string;
   session_id: string | null;
@@ -35,7 +41,7 @@ interface RawLocalJobEntry {
   origin: Origin;
 }
 
-interface RawRemoteJobEntry {
+interface RawRemoteJobEntry extends ArchiveTagged, AgentFields {
   qmb_job_id: string;
   session_id: string | null;
   created_at: string;
@@ -79,6 +85,11 @@ export function normalizeJob(raw: RawJobEntry): JobSummary {
       },
       query_excerpt: raw.query_excerpt,
       origin: raw.origin,
+      archive: raw.archive,
+      also_in: raw.also_in,
+      agent_name: raw.agent_name ?? null,
+      user: raw.user ?? null,
+      task: raw.task ?? null,
     };
   }
   return {
@@ -92,6 +103,11 @@ export function normalizeJob(raw: RawJobEntry): JobSummary {
     stats: raw.stats,
     query_excerpt: raw.query_excerpt,
     origin: raw.origin,
+    archive: raw.archive,
+    also_in: raw.also_in,
+    agent_name: raw.agent_name ?? raw.agent?.name ?? null,
+    user: raw.user ?? raw.agent?.user ?? null,
+    task: raw.task ?? raw.agent?.task ?? null,
   };
 }
 
@@ -112,11 +128,10 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 export type IndexScope = "local" | "remote";
 
 /**
- * Fetch one half of the index (see `src/qmb/web/server.py::JobIndexCache`).
- * `scope=local` resolves in local-scan time (no GCS calls); `scope=remote`
- * costs a single `index.json` download. The frontend fetches both in
- * parallel and merges them client-side (see `mergeIndex.ts`) so the UI can
- * render local data immediately without waiting on the remote half.
+ * Fetch the local half of the index (see `src/qmb/web/server.py::JobIndexCache`).
+ * It resolves in local-scan time (no GCS calls), so the UI renders it
+ * immediately; each remote archive is fetched separately via
+ * `fetchArchiveIndex` and merged in client-side (see `mergeIndex.ts`).
  */
 export async function fetchIndex(
   scope: IndexScope,
@@ -124,36 +139,60 @@ export async function fetchIndex(
 ): Promise<IndexResponse> {
   const params = new URLSearchParams({ scope });
   if (options.refresh) params.set("refresh", "1");
-  const raw = await getJson<RawIndexResponse>(`/api/index?${params}`);
+  return normalizeIndex(await getJson<RawIndexResponse>(`/api/index?${params}`));
+}
+
+/** The configured remote archives, primary first (no GCS calls). */
+export async function fetchArchives(): Promise<ArchiveStatus[]> {
+  const payload = await getJson<{ archives: ArchiveStatus[] }>("/api/archives");
+  return payload.archives;
+}
+
+/**
+ * Fetch one remote archive's half of the index — a single `index.json`
+ * download, cached server-side per archive, so a slow or failing archive
+ * never holds up the others.
+ */
+export async function fetchArchiveIndex(
+  archive: string,
+  options: { refresh?: boolean } = {},
+): Promise<IndexResponse> {
+  const params = new URLSearchParams({ archive });
+  if (options.refresh) params.set("refresh", "1");
+  return normalizeIndex(await getJson<RawIndexResponse>(`/api/index?${params}`));
+}
+
+function normalizeIndex(raw: RawIndexResponse): IndexResponse {
   return { ...raw, jobs: raw.jobs.map(normalizeJob) };
 }
 
 /**
  * On-demand full session detail (agents/tasks/cwds) for a remote session
  * that was only available as a derived summary from `index.json` entries.
- * Cached server-side per session id.
+ * Cached server-side per archive and session id.
  */
-export function fetchSessionDetail(
-  sessionId: string,
-  scope: IndexScope,
-): Promise<SessionSummary> {
-  return getJson<SessionSummary>(
-    `/api/sessions/${encodeURIComponent(sessionId)}?scope=${scope}`,
-  );
+export function fetchSessionDetail(sessionId: string, archive: string): Promise<SessionSummary> {
+  const params = new URLSearchParams({ archive });
+  return getJson<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}?${params}`);
 }
 
-export function fetchJobDetail(jobId: string): Promise<JobDetail> {
-  return getJson<JobDetail>(`/api/jobs/${encodeURIComponent(jobId)}`);
+export function fetchJobDetail(jobId: string, archive: string): Promise<JobDetail> {
+  const params = new URLSearchParams({ archive });
+  return getJson<JobDetail>(`/api/jobs/${encodeURIComponent(jobId)}?${params}`);
 }
 
 export function fetchJobPreview(
   jobId: string,
+  archive: string,
   page: number,
   pageSize = 200,
 ): Promise<PreviewResponse> {
-  return getJson<PreviewResponse>(
-    `/api/jobs/${encodeURIComponent(jobId)}/preview?page=${page}&page_size=${pageSize}`,
-  );
+  const params = new URLSearchParams({
+    archive,
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  return getJson<PreviewResponse>(`/api/jobs/${encodeURIComponent(jobId)}/preview?${params}`);
 }
 
 export function fetchArchiveSearch(

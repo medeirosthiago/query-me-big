@@ -9,23 +9,33 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from google.cloud import bigquery
 
 
-def list_dataset_ids(client: bigquery.Client) -> list[str]:
-    """Return dataset ids for the active project in a stable order."""
-    project_id = getattr(client, "project", None)
+def _resolve_project(client: bigquery.Client, project: str | None) -> str | None:
+    """Return the explicit project, falling back to the client's project."""
+    return project or getattr(client, "project", None)
+
+
+def list_dataset_ids(client: bigquery.Client, project: str | None = None) -> list[str]:
+    """Return dataset ids for ``project`` (default: the client's) in a stable order."""
+    project_id = _resolve_project(client, project)
     datasets = client.list_datasets(project=project_id) if project_id else client.list_datasets()
     return sorted((dataset.dataset_id for dataset in datasets), key=str.lower)
 
 
-def list_dataset_tables(client: bigquery.Client, dataset_id: str) -> tuple[str, ...]:
+def list_dataset_tables(
+    client: bigquery.Client, dataset_id: str, project: str | None = None
+) -> tuple[str, ...]:
     """Return table ids for a dataset in a stable order."""
-    project_id = getattr(client, "project", None)
+    project_id = _resolve_project(client, project)
     dataset_ref = f"{project_id}.{dataset_id}" if project_id else dataset_id
     tables = client.list_tables(dataset_ref)
     return tuple(sorted((table.table_id for table in tables), key=str.lower))
 
 
 def build_table_index(
-    client: bigquery.Client, dataset_ids: Sequence[str], max_workers: int = 8
+    client: bigquery.Client,
+    dataset_ids: Sequence[str],
+    max_workers: int = 8,
+    project: str | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Fetch tables for many datasets concurrently.
 
@@ -40,7 +50,7 @@ def build_table_index(
 
     def _timed(dataset_id: str) -> tuple[str, tuple[str, ...], float]:
         t = time.perf_counter()
-        result = list_dataset_tables(client, dataset_id)
+        result = list_dataset_tables(client, dataset_id, project)
         return dataset_id, result, time.perf_counter() - t
 
     table_index: dict[str, tuple[str, ...]] = {}
@@ -74,18 +84,20 @@ def build_table_index(
     return table_index
 
 
-def get_dataset_metadata(client: bigquery.Client, dataset_id: str) -> bigquery.Dataset:
+def get_dataset_metadata(
+    client: bigquery.Client, dataset_id: str, project: str | None = None
+) -> bigquery.Dataset:
     """Fetch dataset metadata for details inspection."""
-    project_id = getattr(client, "project", None)
+    project_id = _resolve_project(client, project)
     dataset_ref = f"{project_id}.{dataset_id}" if project_id else dataset_id
     return client.get_dataset(dataset_ref)
 
 
 def get_table_metadata(
-    client: bigquery.Client, dataset_id: str, table_id: str
+    client: bigquery.Client, dataset_id: str, table_id: str, project: str | None = None
 ) -> bigquery.Table:
     """Fetch table metadata for details inspection."""
-    project_id = getattr(client, "project", None)
+    project_id = _resolve_project(client, project)
     if project_id:
         table_ref = f"{project_id}.{dataset_id}.{table_id}"
     else:
